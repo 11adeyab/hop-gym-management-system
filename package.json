@@ -1,0 +1,20 @@
+{
+  "name": "basic-booking-system",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "nodemon svr.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "express": "^5.2.1",
+    "html5-qrcode": "^2.3.8",
+    "mysql": "^2.18.1",
+    "nodemailer": "^8.0.5",
+    "nodemon": "^3.1.14",
+    "qrcode": "^1.5.4"
+  }
+}
