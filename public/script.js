@@ -1,54 +1,113 @@
-//console.log("script running");
+//window.addEventListener("load", loadPage);
+function main() {
+    handleElements()
+    handleEventListener();
+}
 
-const fullname = document.querySelector("#fullname");
-const email = document.querySelector("#email");
-const session = document.querySelector("#session");
-const date = document.querySelector("#date");
-const time = document.querySelector("#time");
-const duration = document.querySelector("#duration");
-const submit_booking = document.querySelector("#submit_booking");
+//this should display a dashboard for the user when they successfully log-in
 
-console.log(duration.options.value);
-submit_booking.addEventListener("click", confirmBooking);
+function handleEventListener() {
+    nav.home.addEventListener("click", () => {
+        console.log("nav home was clicked!");
+        window.location.href="/";
+    }); 
 
-async function confirmBooking() {
-    const payload = {
-        full_name: fullname.value, 
-        email_address: email.value, 
-        session_type: session.value,
-        start_date: date.value,
-        start_time: time.value, 
-        session_duration: Number(duration.value)
-    }
-    const post_request = await fetch("/bookings", {
-        method: "POST", 
-        headers: {
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+    nav.register.addEventListener("click", () => {
+        console.log("nav register was clicked!");
+        //sends a HTTP request to the server
+        window.location.href = "/register";
+    })
+    
+    nav.login.addEventListener("click", () => {
+        console.log("nav login was clicked!");
+        //refreshes the page
+        window.location.href = "/login";
     });
 
-    if (post_request.ok) {
-        console.log("POST request successful");
-        const response = await post_request.json();
-        console.log(response);
-        submitResults(response.qrcode_img);
-    } else {
-        console.log("POST request failed!");
+    if (register.btn) {
+        register.btn.addEventListener("click", async() => {
+            console.log("register btn clicked")
+            const payload = {
+                name: register.name.value,
+                email: register.email.value,
+                password: register.password.value
+
+            }
+
+            const request = await fetch("/register", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(payload) });
+
+            if (request.ok) {
+                const response = await request.json();
+                console.log(response.message);
+                console.log(response.data);
+                
+                document.querySelector("#register_form").remove();
+            } 
+            else {
+                console.error("Error - POST request failed!");
+            }});
+        
+    }
+    
+    login.btn.addEventListener("click", async() => {
+        console.log("login btn clicked");
+        const payload = {
+            email: login.email.value,
+            password: login.password.value
+        }
+        const request = await fetch("/login", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload) 
+        });
+
+        if (request.ok) {
+            const response = await request.json();
+            console.log(response.message);
+            console.log(response.data);
+                
+            //document.querySelector("#login_form").remove();
+            return window.location.href = "/dashboard";
+            
+        } 
+        else {
+            const response = await request.json();
+            console.log(response.message);
+            console.log(response.data);
+            console.error("Error - POST request failed!");
+            }
+        });
+
+}
+
+function handleElements() {
+     nav = {
+        home: document.querySelector("#nav_home"),
+        register: document.querySelector("#nav_register"),
+        login: document.querySelector("#nav_login") 
+    };
+
+     register = {
+        name: document.querySelector("#register_name "),
+        email: document.querySelector("#register_email"),
+        password: document.querySelector("#register_password"),
+        btn: document.querySelector("#register_btn")
+    };
+
+    login = {
+        email: document.querySelector("#login_email"),
+        password: document.querySelector("#login_password"),
+        btn: document.querySelector("#login_btn") 
     };
 
 }
 
-function submitResults(data) {
-    document.querySelector("#booking_form").remove();
-    const results = document.querySelector("#results");
-    const heading = document.createElement("h1");
-    heading.textContent = "Booking Successful";
-    results.append(heading);
-    const para = document.createElement("p");
-    para.textContent = "Thank you for booking a session: here is your QR Code";
-    heading.append(para);
-    const qr_code = document.createElement("img");
-    qr_code.src = data;
-    para.append(qr_code);
-}; 
+let nav, login, register;
+main();

@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "express": "^5.2.1",
+    "express-session": "^1.19.0",
     "html5-qrcode": "^2.3.8",
     "mysql": "^2.18.1",
     "nodemailer": "^8.0.5",

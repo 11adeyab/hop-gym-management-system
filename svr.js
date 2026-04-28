@@ -4,6 +4,7 @@ const mysql = require("mysql");
 const qrcode = require("qrcode");
 const nodemailer = require("nodemailer");
 const app = express();
+const session = require("express-session");
 
 const connection = mysql.createConnection( {
     host: "localhost",
@@ -34,11 +35,264 @@ const transport = nodemailer.createTransport({
     }
 });
 
+//creates a session handler that creates sessions and stores their data
+
+app.use(session({
+    secret: "this is my secret",
+    resave: false,
+    saveUninitialized: false
+}));
+
+
 app.use(express.json());
+
+app.get("/", (req, res) => {
+    console.log("hello");
+    if (!req.session.user) {
+        res.sendFile(path.resolve(__dirname, "public", "index.html"));
+    } else {
+        res.redirect("/dashboard");
+    }
+})
+
 app.use("/", express.static(path.resolve(__dirname, "public")));
 app.use("/node_modules", express.static((path.resolve(__dirname, "node_modules"))));
 app.use("/admin", express.static(path.resolve(__dirname, "admin")));
 
+app.get("/register", (req, res) => {
+    //console.log(req);
+
+    if (!req.session.user) {
+        res.sendFile(path.resolve(__dirname, "public", "register.html"));
+    } else {
+        res.send("You need to log out before accessing the registration page!");
+    }
+})
+
+app.get("/login", (req, res) => {
+    //console.log(req);
+
+    if (!req.session.user) {
+        res.sendFile(path.resolve(__dirname, "public", "login.html"));
+    } else {
+        res.send("Your already logged in!");
+    }
+    //res.sendFile(path.resolve(__dirname, "public", "login.html"));
+})
+
+app.post("/register", (req, res) => {
+    //console.log(req.body);
+    const query =  `INSERT INTO users (name, email, password) VALUES ("${req.body.name}", "${req.body.email}", "${req.body.password}")`;
+    connection.query(query);
+    res.json({message: "Registration was a success!", data: req.body});
+});
+
+app.post("/login", (req, res) => {
+    //console.log(req.body);
+    //console.log(req.session);
+    const query = `SELECT user_id, name, email, password FROM users`;
+    connection.query(query, (error, result) => {
+        if (error) {
+            console.log(error);
+            return res.status(500).json({message: "SQL error", data: error});
+        }
+
+        for (let i = 0; i < result.length; i++) {
+            //when login details match
+            if (result[i].email === req.body.email && result[i].password === req.body.password) {
+                //if session doesn't exist!
+                console.log("There was a match!");
+                if (!req.session.user) {
+                    req.session.user = {
+                        id: result[i].user_id,
+                        name: result[i].name,
+                        email: result[i].email
+                    }
+                    return res.json({message: `Login successful, hello ${req.session.user.name}`})
+                } else {
+                    return res.json({message: `Welcome back ${req.session.user.name}`}); 
+                }
+            }
+        }
+        console.log("user can't be found!");
+        return res.status(500).json({message: "Login failed, user credentials could not be found!", data: req.session});
+    });
+});
+
+app.get("/dashboard", (req, res) => {
+    if (!req.session.user) {
+        return res.send("Error, you have not logged in");
+    } 
+    res.sendFile(path.resolve(__dirname, "public", "dashboard.html"));
+});
+
+app.get("/api/user", (req, res) => {
+    res.json({data: req.session.user});
+});
+
+app.get("/makeBooking", (req, res) => {
+    if (!req.session.user) {
+        return res.send("Error, you have not logged in");
+    } 
+    res.sendFile(path.resolve(__dirname, "public", "makeBooking.html"));
+});
+
+
+app.get("/manageBookings", (req, res) => {
+    if (!req.session.user) {
+        return res.send("Error, you have not logged in");
+    } 
+    res.sendFile(path.resolve(__dirname, "public", "manageBookings.html"));
+});
+
+
+app.get("/api/timetable", (req, res) => {
+    //res.json({data: req.session.user});
+
+    const query = "SELECT session_id, session_name, DATE(start_date) AS start_date, start_time, duration, spaces FROM timetable";
+    connection.query(query, (error, result) => {
+        if (error) {
+            return res.send("SQL error");
+        }
+        //console.log(result);
+        return res.json({data: result});
+    }) 
+});
+
+
+app.post("/api/bookings", async (req, res) => {
+    console.log(req.session);
+    const session_id = req.body.session_id;
+    const start_date = req.body.start_date;
+    const start_time = req.body.start_time;
+    const duration = req.body.duration;
+    const spaces = req.body.spaces;
+
+    const current_date = new Date().getDate();
+    //Session can't be booked after it ends
+    if (current_date > start_date) {
+        return res.status(500).json({message: "This session can't be booked, it is too late!"});
+    }
+
+    //WHen there is no more available space
+    if (spaces === 0) {
+        return res.status(500).json({message: "This session can't be booked, there is no more space left!"});
+    }
+    
+    const current_time = new Date();
+    const current_hrs = current_time.getHours();
+    const current_mins = current_time.getMinutes();
+    const current_time_str = `${String(current_hrs).padStart(2, "0")}:${String(current_mins).padStart(2, "0")}`;
+
+    const [hrs, mins] = start_time.split(":");
+    const endHour = Number(hrs) + duration;
+    const end_time = `${String(endHour).padStart(2, "0")}:${mins}`;
+
+    if (current_time_str >= end_time) {
+        console.log("Session has already ended!");
+        return res.status(500).json({ message: "This session can't be booked, it already ended!"});
+    }
+
+    if (current_time_str >= start_time) {
+        console.log("Session has already started!");
+        return res.status(500).json({message: "This session can't be booked, it already started!"})
+    }
+
+    //Prevent user from booking twice?
+    const query3  = `SELECT * FROM bookings WHERE user_id = ${req.session.user.id} & session_id = ${session_id}`;
+    connection.query(query3, async (error, result) => {
+        if (error) {
+            console.log("SQL error");
+            return res.status(500).json({message: "SQL error"});
+        }
+        if (result.length >= 1) {
+            console.log("This session has already been booked!");
+            return res.status(500).json({message:"This session has already been booked!"});
+        } else {
+            const qrcodeData = crypto.randomUUID();
+            const qrCodetoDataURL = await qrcode.toDataURL(qrcodeData);     const qrCodetoBuffer = await qrcode.toBuffer(qrcodeData);
+            const query2 = `INSERT INTO bookings (user_id, session_id, qr_code) VALUES (${req.session.user.id}, ${session_id}, "${qrcodeData}")`;
+            connection.query(query2);
+            const query1 = `UPDATE timetable SET spaces = spaces - 1 WHERE session_id = ${req.body.session_id}`
+            connection.query(query1, (error) => {
+            if (error) {
+                console.log(error)
+                return res.status(500).json({message: "SQL error"})
+            }})
+            transport.sendMail({
+        to: `${req.session.user.email}`,
+        subject: "Your Boxing Session Booking Confirmation",
+        html: `
+                    <h1>Booking Confirmed!</h1>
+                    <p>Hi ${req.session.user.name},</p>
+                    <p>Your boxing session has been booked:</p>
+                    <ul>
+                        <li><strong>Session Name:</strong> ${req.body.session_name}</li>
+                        <li><strong>Date:</strong> ${start_date}</li>
+                        <li><strong>Time:</strong> ${start_time}</li>
+                        <li><strong>Duration:</strong> ${duration}hr</li>
+                    </ul>
+                    <p>Your QR code is attached below. Please show this QR code at check-in.</p>
+                    <img src="cid:qrcode" alt="QR Code" style="width: 200px; height: 200px;">
+                `,
+                attachments: [
+                    {
+                        filename: "booking-qrcode.png",
+                        content: qrCodetoBuffer,
+                        cid: "qrcode"
+                    }
+                ]
+            }
+        ); return res.json({message: "session has been booked!", data: qrCodetoDataURL});
+        }
+    });
+});
+
+app.get("/api/bookings", (req, res) => {
+    console.log(req.session.user);
+    const query1 = `SELECT booking_id, session_id, qr_code FROM bookings WHERE user_id = ${req.session.user.id}`;
+    connection.query(query1, (error, result1) => {
+        //console.log(result1[0].booking_id);
+        if (error) {
+            return res.status(500).json({message: "SQL error"});
+        }
+
+        if (result1.length === 0) {
+            return res.status(500).json({message: "SQL error"});
+        }
+
+        for (let i = 0; i < result1.length; i++) {
+            //retrieve session information for each booking; 
+            const query2 = `SELECT session_name, start_date, start_time, duration FROM timetable WHERE session_id = ${result1[i].session_id}`;
+            connection.query(query2, async (error, result2) => {
+                if (error) {
+                    return res.status(500).json({message: "SQL error"});
+                }
+                const QRCodeImageBrowser = await qrcode.toDataURL(result1[i].qr_code);
+                result2[i].qr_code = QRCodeImageBrowser
+                result2[i].booking_id = result1[i].booking_id;
+                return res.json({message: "Booked sessions retrieved", data: result2});
+            })
+        }
+        
+    })
+});
+
+app.delete("/api/bookings", (req, res) => {
+    console.log(req.body.booking_id);
+    const booking_id = req.body.booking_id;
+    const query =  `DELETE FROM bookings WHERE booking_id = ${booking_id}`;
+    connection.query(query, (error) => {
+        if (error) {
+            console.log("SQL error");
+            return res.status(500).json({message: "SQL error"});
+        }
+
+        return res.json({message: "Booking has been removed!"});
+    } );
+
+
+})
 //handles booking requests by generating a QR code, storing booking information inside mySQL database server and sends a confirmation email containing the QR code
 app.post("/bookings", async (req, res) => {
     //QR code will contain a randomly generated ID
