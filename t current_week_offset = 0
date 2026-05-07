@@ -1,0 +1,11 @@
+[33mcommit dedcde9e0c5c6fcc76af9e23cb1a80d1eff3a65d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m
+Author: 11adeyab <11adeyab070704@gmail.com>
+Date:   Tue Apr 28 16:45:39 2026 +0100
+
+    complete login and registration system with a working booking management system
+
+[33mcommit cd30d24e097ad4c16f5ec26106e9c92e22716bb9[m
+Author: 11adeyab <11adeyab070704@gmail.com>
+Date:   Sat Apr 25 04:40:36 2026 +0100
+
+    prototype version with email sending, qr code scanning & database integration

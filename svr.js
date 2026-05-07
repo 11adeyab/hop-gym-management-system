@@ -149,7 +149,7 @@ app.get("/manageBookings", (req, res) => {
 app.get("/api/timetable", (req, res) => {
     //res.json({data: req.session.user});
 
-    const query = "SELECT session_id, session_name, DATE(start_date) AS start_date, start_time, duration, spaces FROM timetable";
+    const query = "SELECT session_id, session_name, DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date, start_time, duration, spaces FROM timetable";
     connection.query(query, (error, result) => {
         if (error) {
             return res.send("SQL error");
@@ -159,82 +159,89 @@ app.get("/api/timetable", (req, res) => {
     }) 
 });
 
-
 app.post("/api/bookings", async (req, res) => {
-    console.log(req.session);
-    const session_id = req.body.session_id;
-    const start_date = req.body.start_date;
-    const start_time = req.body.start_time;
-    const duration = req.body.duration;
-    const spaces = req.body.spaces;
+    const { session_id, start_date, start_time, duration, spaces } = req.body;
 
-    const current_date = new Date().getDate();
-    //Session can't be booked after it ends
-    if (current_date > start_date) {
-        return res.status(500).json({message: "This session can't be booked, it is too late!"});
+    const today = new Date().toISOString().split("T")[0];
+
+    // Check's the time if its not TODAY
+    if (start_date < today) {
+        return res.status(400).json({
+            message: "This session can't be booked, it is in the past!"
+        });
     }
 
-    //WHen there is no more available space
+    // ❌ Checks if there is no more space left
     if (spaces === 0) {
-        return res.status(500).json({message: "This session can't be booked, there is no more space left!"});
-    }
-    
-    const current_time = new Date();
-    const current_hrs = current_time.getHours();
-    const current_mins = current_time.getMinutes();
-    const current_time_str = `${String(current_hrs).padStart(2, "0")}:${String(current_mins).padStart(2, "0")}`;
-
-    const [hrs, mins] = start_time.split(":");
-    const endHour = Number(hrs) + duration;
-    const end_time = `${String(endHour).padStart(2, "0")}:${mins}`;
-
-    if (current_time_str >= end_time) {
-        console.log("Session has already ended!");
-        return res.status(500).json({ message: "This session can't be booked, it already ended!"});
+        return res.status(400).json({
+            message: "This session can't be booked, there no spaces left!"
+        });
     }
 
-    if (current_time_str >= start_time) {
-        console.log("Session has already started!");
-        return res.status(500).json({message: "This session can't be booked, it already started!"})
+    // Only check's the time if its TODAY
+    if (start_date === today) {
+        const now = new Date();
+        const current_time_str = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+        const [hrs, mins] = start_time.split(":");
+        const endHour = Number(hrs) + duration;
+        const end_time = `${String(endHour).padStart(2, "0")}:${mins}`;
+
+        if (current_time_str >= end_time) {
+            return res.status(400).json({
+                message: "This session can't be booked, it already ended!"
+            });
+        }
+
+        if (current_time_str >= start_time) {
+            return res.status(400).json({
+                message: "This session can't be booked, it already started!"
+            });
+        }
     }
 
-    //Prevent user from booking twice?
-    const query3  = `SELECT * FROM bookings WHERE user_id = ${req.session.user.id} & session_id = ${session_id}`;
+    // ✅ Now booking logic runs for BOTH today (valid time) and future dates
+
+    const query3 = `
+        SELECT * FROM bookings 
+        WHERE user_id = ${req.session.user.id} 
+        AND session_id = ${session_id}
+    `;
+
     connection.query(query3, async (error, result) => {
         if (error) {
-            console.log("SQL error");
-            return res.status(500).json({message: "SQL error"});
+            console.log(error);
+            return res.status(500).json({ message: "SQL error" });
         }
+
         if (result.length >= 1) {
-            console.log("This session has already been booked!");
-            return res.status(500).json({message:"This session has already been booked!"});
-        } else {
-            const qrcodeData = crypto.randomUUID();
-            const qrCodetoDataURL = await qrcode.toDataURL(qrcodeData);     const qrCodetoBuffer = await qrcode.toBuffer(qrcodeData);
-            const query2 = `INSERT INTO bookings (user_id, session_id, qr_code) VALUES (${req.session.user.id}, ${session_id}, "${qrcodeData}")`;
-            connection.query(query2);
-            const query1 = `UPDATE timetable SET spaces = spaces - 1 WHERE session_id = ${req.body.session_id}`
-            connection.query(query1, (error) => {
-            if (error) {
-                console.log(error)
-                return res.status(500).json({message: "SQL error"})
-            }})
-            transport.sendMail({
-        to: `${req.session.user.email}`,
-        subject: "Your Boxing Session Booking Confirmation",
-        html: `
-                    <h1>Booking Confirmed!</h1>
-                    <p>Hi ${req.session.user.name},</p>
-                    <p>Your boxing session has been booked:</p>
-                    <ul>
-                        <li><strong>Session Name:</strong> ${req.body.session_name}</li>
-                        <li><strong>Date:</strong> ${start_date}</li>
-                        <li><strong>Time:</strong> ${start_time}</li>
-                        <li><strong>Duration:</strong> ${duration}hr</li>
-                    </ul>
-                    <p>Your QR code is attached below. Please show this QR code at check-in.</p>
-                    <img src="cid:qrcode" alt="QR Code" style="width: 200px; height: 200px;">
-                `,
+            return res.status(400).json({
+                message: "This session has already been booked!"
+            });
+        }
+        const qrcodeData = crypto.randomUUID();
+        const qrCodetoDataURL = await qrcode.toDataURL(qrcodeData);
+        const qrCodetoBuffer = await qrcode.toBuffer(qrcodeData);
+
+        const insertQuery = `
+                INSERT INTO bookings (user_id, session_id, qr_code)
+                VALUES (${req.session.user.id}, ${session_id}, "${qrcodeData}")
+        `;
+
+        connection.query(insertQuery);
+
+        const updateQuery = `
+                UPDATE timetable 
+                SET spaces = spaces - 1 
+                WHERE session_id = ${session_id}
+        `;
+
+        connection.query(updateQuery);
+
+        await transport.sendMail({
+                to: req.session.user.email,
+                subject: "Your Boxing Session Booking Confirmation",
+                html: `<h1>Booking Confirmed!</h1>`,
                 attachments: [
                     {
                         filename: "booking-qrcode.png",
@@ -242,40 +249,94 @@ app.post("/api/bookings", async (req, res) => {
                         cid: "qrcode"
                     }
                 ]
-            }
-        ); return res.json({message: "session has been booked!", data: qrCodetoDataURL});
-        }
+        });
+        console.log("Session has been booked!");
+        return res.json({
+                message: "Session has been booked!",
+                data: qrCodetoDataURL
+        });
+
     });
 });
 
 app.get("/api/bookings", (req, res) => {
-    console.log(req.session.user);
-    const query1 = `SELECT booking_id, session_id, qr_code FROM bookings WHERE user_id = ${req.session.user.id}`;
-    connection.query(query1, (error, result1) => {
-        //console.log(result1[0].booking_id);
-        if (error) {
-            return res.status(500).json({message: "SQL error"});
-        }
+    console.log("=== /api/bookings called ===");
+    console.log("Session user:", req.session.user);
+    
+    if (!req.session.user) {
+        console.log("❌ No user in session");
+        return res.status(401).json({message: "Not logged in"});
+    }
 
-        if (result1.length === 0) {
-            return res.status(500).json({message: "SQL error"});
-        }
+    const user_id = req.session.user.id;
+    console.log("User ID:", user_id);
+    
+    const query1 = `SELECT booking_id, session_id, qr_code FROM bookings WHERE user_id = ?`;
+    console.log("Query 1:", query1);
+    
+    let finalResult = [];
+    let completed = 0;
 
-        for (let i = 0; i < result1.length; i++) {
-            //retrieve session information for each booking; 
-            const query2 = `SELECT session_name, start_date, start_time, duration FROM timetable WHERE session_id = ${result1[i].session_id}`;
-            connection.query(query2, async (error, result2) => {
-                if (error) {
-                    return res.status(500).json({message: "SQL error"});
-                }
-                const QRCodeImageBrowser = await qrcode.toDataURL(result1[i].qr_code);
-                result2[i].qr_code = QRCodeImageBrowser
-                result2[i].booking_id = result1[i].booking_id;
-                return res.json({message: "Booked sessions retrieved", data: result2});
-            })
-        }
+    connection.query(query1, [user_id], (error, bookings) => {
+        console.log("Query 1 callback fired");
         
-    })
+        if (error) {
+            console.error("❌ Query 1 error:", error);
+            return res.status(500).json({message: "SQL error", error: error.message});
+        }
+
+        console.log("✅ Query 1 success");
+        console.log("Bookings found:", bookings);
+        console.log("Number of bookings:", bookings.length);
+
+        if (bookings.length === 0) {
+            console.log("⚠️ No bookings found");
+            return res.json({message: "No bookings found", data: []});
+        }
+
+        console.log("Processing", bookings.length, "bookings...");
+
+        for (let i = 0; i < bookings.length; i++) {
+            const booking = bookings[i];
+            console.log(`\nProcessing booking ${i}:`, booking);
+            
+            const query2 = `SELECT session_name, DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date, start_time, duration FROM timetable WHERE session_id = ?`;
+            
+            connection.query(query2, [booking.session_id], async (error, results) => {
+                console.log(`Query 2 callback fired for booking ${i}`);
+                
+                if (error) {
+                    console.error("❌ Query 2 error:", error);
+                    return;
+                }
+
+                console.log(`✅ Query 2 success for booking ${i}`);
+                console.log("Results:", results);
+
+                if (results.length > 0) {
+                    const item = {
+                        booking_id: booking.booking_id,
+                        session_name: results[0].session_name,
+                        start_date: results[0].start_date,
+                        start_time: results[0].start_time,
+                        duration: results[0].duration,
+                        qr_code: await qrcode.toDataURL(booking.qr_code)
+                    };
+                    console.log("Adding to finalResult:", item);
+                    finalResult.push(item);
+                }
+
+                completed++;
+                console.log(`Completed: ${completed}/${bookings.length}`);
+                
+                if (completed === bookings.length) {
+                    console.log("🎉 All queries done!");
+                    console.log("Final result:", finalResult);
+                    return res.json({message: "Bookings retrieved", data: finalResult});
+                }
+            });
+        }
+    });
 });
 
 app.delete("/api/bookings", (req, res) => {
@@ -293,6 +354,7 @@ app.delete("/api/bookings", (req, res) => {
 
 
 })
+
 //handles booking requests by generating a QR code, storing booking information inside mySQL database server and sends a confirmation email containing the QR code
 app.post("/bookings", async (req, res) => {
     //QR code will contain a randomly generated ID
@@ -330,7 +392,8 @@ app.post("/bookings", async (req, res) => {
                     }
                 ]
             }); 
-    });
+    }
+);
 
 //confirms each persons booking attendance
 app.post("/attendance", (req, res) => {
