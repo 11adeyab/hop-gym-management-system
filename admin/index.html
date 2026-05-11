@@ -1,12 +1,956 @@
 <!DOCTYPE html>
-<html>
-    <head>
-    </head>
-    <body>
-        <script src="/node_modules/html5-qrcode/html5-qrcode.min.js"></script>
-        <button id="scanner_btn">Scan QR-Code</button>
-        <div id="scanner"></div>
-        <div id="results"></div>
-        <script src="script.js"></script>
-    </body>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HOP Boxing Academy — Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary:    #0F71F0;
+            --primary-bg: #B2D4FC;
+            --bg:         #F4F4F4;
+            --white:      #FFFFFF;
+            --border:     #E0E0E0;
+            --text:       #1A1A1A;
+            --muted:      #A1A1A1;
+            --danger:     #D40404;
+            --danger-bg:  rgba(212,4,4,0.08);
+            --success:    #16A34A;
+            --success-bg: rgba(22,163,74,0.10);
+            --warning:    #D97706;
+            --warning-bg: rgba(217,119,6,0.10);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .app {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ── Sidebar ── */
+        #sidebar {
+            width: 220px;
+            height: 100%;
+            background: var(--white);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .sidebar-brand {
+            background: var(--primary);
+            color: white;
+            padding: 18px 16px;
+            flex-shrink: 0;
+        }
+
+        .brand-name {
+            font-size: 0.95rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .admin-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 700;
+            background: rgba(255,255,255,0.25);
+            padding: 2px 7px;
+            letter-spacing: 0.08em;
+            margin-top: 4px;
+        }
+
+        .brand-user {
+            font-size: 0.78rem;
+            font-weight: 600;
+            margin-top: 4px;
+            opacity: 0.85;
+        }
+
+        nav {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 6px 0;
+            overflow-y: auto;
+        }
+
+        nav a {
+            color: var(--text);
+            text-decoration: none;
+            padding: 11px 16px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border-left: 3px solid transparent;
+            transition: background 0.1s;
+            display: block;
+        }
+
+        nav a:hover { background: var(--bg); }
+
+        nav a.active {
+            color: var(--primary);
+            border-left-color: var(--primary);
+            background: rgba(15,113,240,0.06);
+        }
+
+        .sidebar-footer { border-top: 1px solid var(--border); }
+
+        .nav-logout {
+            display: block;
+            color: var(--muted);
+            text-decoration: none;
+            padding: 11px 16px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border-left: 3px solid transparent;
+            transition: background 0.1s, color 0.1s;
+        }
+
+        .nav-logout:hover { background: var(--danger-bg); color: var(--danger); }
+
+        /* ── Main wrap ── */
+        .main-wrap {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .mobile-topbar {
+            display: none;
+            align-items: center;
+            gap: 14px;
+            background: var(--white);
+            border-bottom: 1px solid var(--border);
+            padding: 0 16px;
+            height: 50px;
+            flex-shrink: 0;
+        }
+
+        .hamburger-btn {
+            background: none;
+            border: none;
+            font-size: 1.4rem;
+            cursor: pointer;
+            color: var(--text);
+            padding: 2px 4px;
+            line-height: 1;
+        }
+
+        .mobile-brand {
+            font-weight: 800;
+            font-size: 0.88rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--primary);
+        }
+
+        main {
+            flex: 1;
+            padding: 28px 32px;
+            overflow-y: auto;
+            background: var(--bg);
+        }
+
+        h2 {
+            font-size: 1.2rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 20px;
+        }
+
+        h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 14px; }
+
+        /* ── Buttons ── */
+        button { cursor: pointer; font-family: inherit; }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 9px 18px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            transition: background 0.1s;
+        }
+
+        .btn-primary:hover { background: #0c5fd4; }
+
+        .btn-ghost {
+            background: var(--white);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 16px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            transition: background 0.1s;
+        }
+
+        .btn-ghost:hover { background: var(--bg); }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            transition: background 0.1s;
+        }
+
+        .btn-danger:hover { background: #b30303; }
+
+        .btn-sm { padding: 5px 12px; font-size: 0.78rem; }
+
+        /* ── Toolbar ── */
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            gap: 12px;
+        }
+
+        .week-nav { display: flex; align-items: center; gap: 16px; }
+
+        #week_label {
+            font-weight: 700;
+            font-size: 0.9rem;
+            min-width: 220px;
+            text-align: center;
+        }
+
+        /* ── Tables ── */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--white);
+            border: 1px solid var(--border);
+        }
+
+        th, td {
+            padding: 11px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+
+        th {
+            background: var(--bg);
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+        }
+
+        tbody tr:hover { background: rgba(15,113,240,0.03); }
+        tbody tr:last-child td { border-bottom: none; }
+        .td-actions { display: flex; gap: 6px; }
+
+        /* ── Scan result cards ── */
+        .scan-result-card {
+            max-width: 440px;
+            padding: 20px 24px;
+            border: 1px solid var(--border);
+            margin-top: 20px;
+        }
+
+        .scan-result-card p { font-size: 1rem; margin-bottom: 14px; font-weight: 600; }
+
+        .scan-ok   { background: var(--success-bg); border-color: rgba(22,163,74,0.3);  color: var(--success); }
+        .scan-warn { background: var(--warning-bg); border-color: rgba(217,119,6,0.3);  color: var(--warning); }
+        .scan-fail { background: var(--danger-bg);  border-color: rgba(212,4,4,0.3);    color: var(--danger);  }
+
+        /* ── Modals ── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .modal-overlay.open { display: flex; }
+
+        .modal-box {
+            background: var(--white);
+            border: 1px solid var(--border);
+            padding: 28px;
+            width: 480px;
+            max-width: 95vw;
+            max-height: 90vh;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-box h3 { margin-bottom: 16px; }
+
+        .modal-box-sm {
+            background: var(--white);
+            border: 1px solid var(--border);
+            padding: 28px;
+            width: 380px;
+            max-width: 95vw;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            text-align: center;
+        }
+
+        .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+        .modal-actions.centered { justify-content: center; }
+
+        .modal-warning { font-size: 0.88rem; color: var(--muted); line-height: 1.6; }
+        .modal-warning strong { color: var(--text); }
+
+        /* ── Form fields ── */
+        .form-label {
+            display: block;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--muted);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-top: 14px;
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 9px 12px;
+            background: var(--white);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 0.88rem;
+            font-family: inherit;
+            transition: border-color 0.1s;
+        }
+
+        .form-input:focus { outline: none; border-color: var(--primary); }
+        .form-input::placeholder { color: var(--muted); }
+        .form-input option { background: var(--white); }
+
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+        .dob-row { display: grid; grid-template-columns: 1fr 2fr 1.5fr; gap: 8px; }
+
+        .form-error { color: var(--danger); font-size: 0.82rem; min-height: 1rem; margin-top: 10px; }
+
+        /* ── Profile cards ── */
+        .profile-card {
+            background: var(--white);
+            border: 1px solid var(--border);
+            padding: 20px 24px;
+            max-width: 620px;
+            margin-bottom: 20px;
+        }
+
+        .profile-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 9px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.87rem;
+        }
+
+        .profile-row:last-child { border-bottom: none; }
+        .profile-label { font-weight: 700; color: var(--muted); font-size: 0.78rem; }
+        .profile-actions { display: flex; gap: 8px; margin-top: 14px; }
+
+        /* ── Filter tabs ── */
+        .filter-tabs {
+            display: flex;
+            border: 1px solid var(--border);
+            margin-bottom: 16px;
+        }
+
+        .filter-tabs button {
+            flex: 1;
+            padding: 8px 14px;
+            border: none;
+            border-right: 1px solid var(--border);
+            background: var(--white);
+            color: var(--muted);
+            font-size: 0.82rem;
+            font-weight: 600;
+            font-family: inherit;
+            transition: background 0.1s, color 0.1s;
+        }
+
+        .filter-tabs button:last-child { border-right: none; }
+        .filter-tabs button:hover { background: var(--bg); color: var(--text); }
+        .filter-tabs button.active { background: var(--primary); color: white; }
+
+        /* ── Booking cards ── */
+        .booking-card {
+            background: var(--white);
+            border: 1px solid var(--border);
+            border-top: none;
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            max-width: 620px;
+        }
+
+        .booking-card:first-child { border-top: 1px solid var(--border); }
+        .booking-card strong { font-size: 0.88rem; display: block; }
+        .booking-card small { color: var(--muted); font-size: 0.8rem; }
+
+        /* ── Status badges ── */
+        .status-tag {
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 3px 9px;
+            white-space: nowrap;
+            border: 1px solid;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .status-upcoming  { background: rgba(15,113,240,0.08); color: var(--primary); border-color: rgba(15,113,240,0.3); }
+        .status-attended  { background: var(--success-bg); color: var(--success); border-color: rgba(22,163,74,0.3); }
+        .status-missed    { background: var(--danger-bg);  color: var(--danger);  border-color: rgba(212,4,4,0.3); }
+
+        /* ── Membership badge ── */
+        .mem-status-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border: 1px solid;
+        }
+
+        .mem-status-active   { background: var(--success-bg); color: var(--success); border-color: rgba(22,163,74,0.3); }
+        .mem-status-inactive { background: var(--danger-bg);  color: var(--danger);  border-color: rgba(212,4,4,0.3); }
+
+        /* ── Reports ── */
+        .report-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 1px;
+            background: var(--border);
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+
+        .summary-card { background: var(--white); padding: 18px 20px; }
+
+        .summary-card .summary-label {
+            font-size: 0.7rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+
+        .summary-card .summary-value { font-size: 1.5rem; font-weight: 800; color: var(--text); }
+        .summary-card.highlight .summary-value { color: var(--primary); }
+
+        .type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            border: 1px solid;
+        }
+
+        .type-booking    { background: rgba(15,113,240,0.08); color: var(--primary); border-color: rgba(15,113,240,0.3); }
+        .type-membership { background: var(--success-bg);     color: var(--success); border-color: rgba(22,163,74,0.3); }
+
+        .report-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .btn-export {
+            background: var(--white);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 7px 16px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            font-family: inherit;
+            transition: background 0.1s;
+        }
+
+        .btn-export:hover { background: var(--bg); }
+
+        /* ── Nav overlay (mobile backdrop) ── */
+        #nav_overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.45);
+            z-index: 150;
+        }
+
+        #nav_overlay.open { display: block; }
+
+        /* ── Mobile ── */
+        @media (max-width: 700px) {
+            body { height: auto; overflow: auto; }
+            .app  { height: auto; min-height: 100vh; overflow: visible; }
+
+            #sidebar {
+                position: fixed;
+                top: 0; left: 0;
+                height: 100%;
+                transform: translateX(-220px);
+                transition: transform 0.25s ease;
+                z-index: 200;
+            }
+
+            #sidebar.open { transform: translateX(0); }
+
+            .mobile-topbar { display: flex; }
+
+            .main-wrap { overflow: visible; }
+            main { overflow: visible; height: auto; padding: 20px 16px; }
+
+            table { display: block; overflow-x: auto; white-space: nowrap; }
+
+            .modal-overlay { align-items: flex-start; padding-top: 20px; }
+
+            .modal-box, .modal-box-sm { width: 95vw; max-width: 95vw; }
+
+            .profile-card, .booking-card { max-width: 100%; }
+            .booking-card { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .toolbar { flex-direction: column; align-items: flex-start; }
+            .report-toolbar { flex-direction: column; align-items: flex-start; }
+            .report-summary { grid-template-columns: 1fr 1fr; }
+            .form-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="app">
+        <aside id="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-name">HOP Boxing</div>
+                <div class="admin-badge">ADMIN</div>
+                <div class="brand-user" id="sidebar_user_name"></div>
+            </div>
+            <nav>
+                <a href="#" id="nav_qr_scanner">QR Scanner</a>
+                <a href="#" id="nav_timetable">Timetable</a>
+                <a href="#" id="nav_customers">Customers</a>
+                <a href="#" id="nav_staff">Staff</a>
+                <a href="#" id="nav_reports">Reports</a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="/logout" class="nav-logout">Log out</a>
+            </div>
+        </aside>
+
+        <div class="main-wrap">
+            <div class="mobile-topbar">
+                <button id="hamburger_btn" class="hamburger-btn">&#9776;</button>
+                <span class="mobile-brand">HOP Boxing — Admin</span>
+            </div>
+            <main id="main_content"></main>
+        </div>
+    </div>
+
+    <div id="nav_overlay"></div>
+
+
+    <!-- ============================================================
+         TEMPLATES
+    ============================================================ -->
+
+    <template id="template_qr_scanner">
+        <section>
+            <h2>QR Scanner</h2>
+            <button id="btn_start_scanner" class="btn-primary">Start Scanner</button>
+            <div id="scanner_container" style="margin-top:20px; max-width:500px;"></div>
+            <div id="scan_result"></div>
+        </section>
+    </template>
+
+    <template id="template_timetable">
+        <section>
+            <h2>Manage Timetable</h2>
+            <div class="toolbar">
+                <div class="week-nav">
+                    <button id="btn_prev_week" class="btn-ghost btn-sm">&#8592; Prev</button>
+                    <span id="week_label"></span>
+                    <button id="btn_next_week" class="btn-ghost btn-sm">Next &#8594;</button>
+                </div>
+                <button id="btn_add_session" class="btn-primary">+ Add Session</button>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Date</th>
+                        <th>Time</th>
+                        <th>Duration</th>
+                        <th>Instructor</th>
+                        <th>Spaces</th>
+                        <th>Gender</th>
+                        <th>Age</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="timetable_body"></tbody>
+            </table>
+        </section>
+    </template>
+
+    <template id="template_customers">
+        <section>
+            <h2>Manage Customers</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Full Name</th>
+                        <th>Email</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="customers_body"></tbody>
+            </table>
+        </section>
+    </template>
+
+    <template id="template_staff">
+        <section>
+            <h2>Manage Staff</h2>
+            <div class="toolbar">
+                <span></span>
+                <button id="btn_add_staff" class="btn-primary">+ Add Staff Account</button>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Full Name</th>
+                        <th>Email</th>
+                        <th>Phone</th>
+                        <th>Gender</th>
+                        <th>Date of Birth</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="staff_body"></tbody>
+            </table>
+        </section>
+    </template>
+
+    <template id="template_reports">
+        <section>
+            <h2>Reports</h2>
+
+            <div class="report-summary">
+                <div class="summary-card highlight">
+                    <div class="summary-label">Total Revenue</div>
+                    <div class="summary-value" id="report_total">£0.00</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Booking Revenue</div>
+                    <div class="summary-value" id="report_bookings">£0.00</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Membership Revenue</div>
+                    <div class="summary-value" id="report_memberships">£0.00</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Total Payments</div>
+                    <div class="summary-value" id="report_count">0</div>
+                </div>
+            </div>
+
+            <div class="report-toolbar">
+                <div class="filter-tabs">
+                    <button id="report_tab_all" class="active">All</button>
+                    <button id="report_tab_bookings">Bookings</button>
+                    <button id="report_tab_memberships">Memberships</button>
+                </div>
+                <button id="btn_export_csv" class="btn-export">Export CSV</button>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Customer</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                    </tr>
+                </thead>
+                <tbody id="reports_body"></tbody>
+            </table>
+        </section>
+    </template>
+
+
+    <!-- ============================================================
+         MODALS
+    ============================================================ -->
+
+    <!-- Add / Edit Session Modal -->
+    <div id="modal_session_overlay" class="modal-overlay">
+        <div class="modal-box">
+            <h3 id="modal_session_title">Add Session</h3>
+
+            <label class="form-label" for="form_session_name">Session Name</label>
+            <input type="text" id="form_session_name" class="form-input" placeholder="e.g. Fundamentals">
+
+            <div class="form-row">
+                <div>
+                    <label class="form-label" for="form_start_date">Date</label>
+                    <input type="date" id="form_start_date" class="form-input">
+                </div>
+                <div>
+                    <label class="form-label" for="form_start_time">Start Time</label>
+                    <input type="time" id="form_start_time" class="form-input">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div>
+                    <label class="form-label" for="form_duration">Duration (hours)</label>
+                    <select id="form_duration" class="form-input">
+                        <option value="1">1 hour</option>
+                        <option value="2">2 hours</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label" for="form_capacity">Capacity</label>
+                    <input type="number" id="form_capacity" class="form-input" min="1" placeholder="20">
+                </div>
+            </div>
+
+            <label class="form-label" for="form_instructor">Instructor</label>
+            <input type="text" id="form_instructor" class="form-input" placeholder="e.g. Q Shillingford">
+
+            <label class="form-label" for="form_gender">Gender Eligibility</label>
+            <select id="form_gender" class="form-input">
+                <option value="Any">Any</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+            </select>
+
+            <div class="form-row">
+                <div>
+                    <label class="form-label" for="form_min_age">Min Age</label>
+                    <input type="number" id="form_min_age" class="form-input" min="0" placeholder="16">
+                </div>
+                <div>
+                    <label class="form-label" for="form_max_age">Max Age</label>
+                    <input type="number" id="form_max_age" class="form-input" min="0" placeholder="80">
+                </div>
+            </div>
+
+            <p id="form_error_msg" class="form-error"></p>
+
+            <div class="modal-actions">
+                <button id="modal_session_btn_save" class="btn-primary">Save</button>
+                <button id="modal_session_btn_close" class="btn-ghost">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Session Confirmation Modal -->
+    <div id="modal_delete_overlay" class="modal-overlay">
+        <div class="modal-box-sm">
+            <h3>Delete Session</h3>
+            <p class="modal-warning">Are you sure you want to delete <strong id="modal_delete_session_name"></strong>? This cannot be undone.</p>
+            <div class="modal-actions centered">
+                <button id="modal_delete_btn_confirm" class="btn-danger">Yes, Delete</button>
+                <button id="modal_delete_btn_close" class="btn-ghost">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Staff Account Modal -->
+    <div id="modal_staff_overlay" class="modal-overlay">
+        <div class="modal-box">
+            <h3>Create Staff Account</h3>
+
+            <div class="form-row">
+                <div>
+                    <label class="form-label" for="staff_first_name">First Name</label>
+                    <input type="text" id="staff_first_name" class="form-input" placeholder="Jane">
+                </div>
+                <div>
+                    <label class="form-label" for="staff_last_name">Last Name</label>
+                    <input type="text" id="staff_last_name" class="form-input" placeholder="Smith">
+                </div>
+            </div>
+
+            <label class="form-label" for="staff_email">Email</label>
+            <input type="email" id="staff_email" class="form-input" placeholder="jane@hop.com">
+
+            <label class="form-label" for="staff_password">Password</label>
+            <input type="password" id="staff_password" class="form-input" placeholder="Password">
+
+            <label class="form-label" for="staff_phone">Phone</label>
+            <input type="text" id="staff_phone" class="form-input" placeholder="07700 900000">
+
+            <label class="form-label">Date of Birth</label>
+            <div class="dob-row">
+                <select id="staff_dob_day" class="form-input">
+                    <option value="" disabled selected>Day</option>
+                </select>
+                <select id="staff_dob_month" class="form-input">
+                    <option value="" disabled selected>Month</option>
+                    <option value="01">January</option>
+                    <option value="02">February</option>
+                    <option value="03">March</option>
+                    <option value="04">April</option>
+                    <option value="05">May</option>
+                    <option value="06">June</option>
+                    <option value="07">July</option>
+                    <option value="08">August</option>
+                    <option value="09">September</option>
+                    <option value="10">October</option>
+                    <option value="11">November</option>
+                    <option value="12">December</option>
+                </select>
+                <input type="number" id="staff_dob_year" class="form-input" placeholder="Year" min="1920" max="2015">
+            </div>
+
+            <label class="form-label" for="staff_gender">Gender</label>
+            <select id="staff_gender" class="form-input">
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+            </select>
+
+            <p id="staff_error_msg" class="form-error"></p>
+
+            <div class="modal-actions">
+                <button id="modal_staff_btn_save" class="btn-primary">Create Account</button>
+                <button id="modal_staff_btn_close" class="btn-ghost">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit User Account Modal -->
+    <div id="modal_edit_overlay" class="modal-overlay">
+        <div class="modal-box">
+            <h3 id="modal_edit_title">Edit Account</h3>
+
+            <input type="hidden" id="edit_user_id">
+            <input type="hidden" id="edit_user_type">
+
+            <div class="form-row">
+                <div>
+                    <label class="form-label" for="edit_first_name">First Name</label>
+                    <input type="text" id="edit_first_name" class="form-input">
+                </div>
+                <div>
+                    <label class="form-label" for="edit_last_name">Last Name</label>
+                    <input type="text" id="edit_last_name" class="form-input">
+                </div>
+            </div>
+
+            <label class="form-label" for="edit_email">Email</label>
+            <input type="email" id="edit_email" class="form-input">
+
+            <label class="form-label" for="edit_phone">Phone</label>
+            <input type="text" id="edit_phone" class="form-input">
+
+            <label class="form-label">Date of Birth</label>
+            <div class="dob-row">
+                <select id="edit_dob_day" class="form-input">
+                    <option value="" disabled selected>Day</option>
+                </select>
+                <select id="edit_dob_month" class="form-input">
+                    <option value="" disabled selected>Month</option>
+                    <option value="01">January</option>
+                    <option value="02">February</option>
+                    <option value="03">March</option>
+                    <option value="04">April</option>
+                    <option value="05">May</option>
+                    <option value="06">June</option>
+                    <option value="07">July</option>
+                    <option value="08">August</option>
+                    <option value="09">September</option>
+                    <option value="10">October</option>
+                    <option value="11">November</option>
+                    <option value="12">December</option>
+                </select>
+                <input type="number" id="edit_dob_year" class="form-input" placeholder="Year" min="1920" max="2015">
+            </div>
+
+            <label class="form-label" for="edit_gender">Gender</label>
+            <select id="edit_gender" class="form-input">
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+            </select>
+
+            <p id="edit_error_msg" class="form-error"></p>
+
+            <div class="modal-actions">
+                <button id="modal_edit_btn_save" class="btn-primary">Save Changes</button>
+                <button id="modal_edit_btn_close" class="btn-ghost">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Account Confirmation Modal -->
+    <div id="modal_delete_account_overlay" class="modal-overlay">
+        <div class="modal-box-sm">
+            <h3>Delete Account</h3>
+            <p class="modal-warning">Are you sure you want to permanently delete the account for <strong id="modal_delete_account_name"></strong>? All bookings and memberships will also be removed. This cannot be undone.</p>
+            <div class="modal-actions centered">
+                <button id="modal_delete_account_btn_confirm" class="btn-danger">Yes, Delete</button>
+                <button id="modal_delete_account_btn_close" class="btn-ghost">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Populate day selects (1–31) for staff creation and edit modals
+        for (const selId of ["staff_dob_day", "edit_dob_day"]) {
+            const sel = document.querySelector("#" + selId);
+            for (let d = 1; d <= 31; d++) {
+                const opt = document.createElement("option");
+                opt.value = d;
+                opt.textContent = d;
+                sel.appendChild(opt);
+            }
+        }
+    </script>
+    <script src="/node_modules/html5-qrcode/html5-qrcode.min.js"></script>
+    <script src="script.js"></script>
+</body>
 </html>

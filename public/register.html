@@ -1,26 +1,292 @@
 <!DOCTYPE html>
-<html>
-    <head>
-    <link rel="stylesheet" href="style.css">
-    </head>
-        <body>
-            <nav>
-                <ul>
-                    <li id="nav_home">Home</li>
-                    <li id="nav_login">Login</li>
-                    <li id="nav_register">Register</li>
-                </ul>
-            </nav>
-            <div id="register_form" class="register_form">
-                <label for="register_name">Name:</label>
-                <input type="text" id="register_name">
-                <label for="register_email">Email Address:</label>
-                <input type="email" id="register_email" >
-                <label for="register_password">Password:</label>
-                <input type="text" id="register_password">
-                <button id="register_btn">Register</button>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register — HOP Boxing Academy</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary:    #0F71F0;
+            --primary-bg: #B2D4FC;
+            --bg:         #F4F4F4;
+            --white:      #FFFFFF;
+            --border:     #E0E0E0;
+            --text:       #1A1A1A;
+            --muted:      #A1A1A1;
+            --danger:     #D40404;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Nav ── */
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 48px;
+            height: 56px;
+            background: var(--white);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-logo {
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .nav-links { display: flex; gap: 0; }
+
+        .nav-links a {
+            color: var(--muted);
+            text-decoration: none;
+            padding: 0 18px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border-left: 1px solid var(--border);
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .nav-links a:hover { color: var(--text); background: var(--bg); }
+        .nav-links .nav-active { color: var(--primary); }
+
+        /* ── Page body ── */
+        .page-body {
+            flex: 1;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 48px 20px;
+        }
+
+        /* ── Card ── */
+        .card {
+            background: var(--white);
+            border: 1px solid var(--border);
+            padding: 40px;
+            width: 100%;
+            max-width: 480px;
+        }
+
+        .card-eyebrow {
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--primary);
+            margin-bottom: 16px;
+        }
+
+        .card h2 {
+            font-size: 1.6rem;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        .card .subtitle {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-bottom: 28px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--muted);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            margin-top: 18px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 0.9rem;
+            font-family: inherit;
+            transition: border-color 0.15s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        input::placeholder { color: var(--muted); }
+
+        select option { background: var(--white); }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .form-row > div label { margin-top: 0; }
+
+        .dob-row {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1.5fr;
+            gap: 8px;
+            margin-top: 18px;
+        }
+
+        .dob-row select, .dob-row input { margin-top: 0; }
+
+        .section-divider {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 22px 0 4px;
+        }
+
+        .btn-submit {
+            width: 100%;
+            margin-top: 24px;
+            padding: 12px;
+            background: var(--primary);
+            color: var(--white);
+            border: none;
+            font-size: 0.9rem;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            letter-spacing: 0.04em;
+            transition: background 0.15s;
+        }
+
+        .btn-submit:hover { background: #0a5ec4; }
+
+        #error_msg {
+            color: var(--danger);
+            font-size: 0.82rem;
+            margin-top: 10px;
+            min-height: 1.1rem;
+        }
+
+        .form-footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.82rem;
+            color: var(--muted);
+        }
+
+        .form-footer a { color: var(--primary); text-decoration: none; font-weight: 600; }
+        .form-footer a:hover { text-decoration: underline; }
+
+        @media (max-width: 640px) {
+            nav { padding: 0 16px; }
+            .nav-links a { padding: 0 14px; }
+            .card { padding: 28px 20px; }
+            .form-row { grid-template-columns: 1fr; }
+            .dob-row { grid-template-columns: 1fr 1fr; }
+            .dob-row input[type="number"] { grid-column: 1 / -1; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <a href="/" class="nav-logo">HOP Boxing</a>
+        <div class="nav-links">
+            <a href="/login">Login</a>
+            <a href="/register" class="nav-active">Register</a>
+        </div>
+    </nav>
+
+    <div class="page-body">
+        <div class="card">
+            <p class="card-eyebrow">HOP Boxing Academy</p>
+            <h2>Create your account</h2>
+            <p class="subtitle">Join the academy and start booking sessions</p>
+
+            <div class="form-row" style="margin-top:0;">
+                <div>
+                    <label for="first_name">First Name</label>
+                    <input type="text" id="first_name" name="first_name" placeholder="Jane" autocomplete="given-name">
+                </div>
+                <div>
+                    <label for="last_name">Last Name</label>
+                    <input type="text" id="last_name" name="last_name" placeholder="Smith" autocomplete="family-name">
+                </div>
             </div>
-            <script src="script.js"></script>
-        </body>
-    </head>
+
+            <label>Date of Birth</label>
+            <div class="dob-row">
+                <select id="dob_day">
+                    <option value="" disabled selected>Day</option>
+                </select>
+                <select id="dob_month">
+                    <option value="" disabled selected>Month</option>
+                    <option value="01">January</option>
+                    <option value="02">February</option>
+                    <option value="03">March</option>
+                    <option value="04">April</option>
+                    <option value="05">May</option>
+                    <option value="06">June</option>
+                    <option value="07">July</option>
+                    <option value="08">August</option>
+                    <option value="09">September</option>
+                    <option value="10">October</option>
+                    <option value="11">November</option>
+                    <option value="12">December</option>
+                </select>
+                <input type="number" id="dob_year" placeholder="Year" min="1920" max="2015">
+            </div>
+
+            <label for="gender">Gender</label>
+            <select id="gender" name="gender">
+                <option value="" disabled selected>Select</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+            </select>
+
+            <hr class="section-divider">
+
+            <label for="email">Email Address</label>
+            <input type="email" id="email" name="email" placeholder="you@example.com" autocomplete="email">
+
+            <label for="phone">Phone Number</label>
+            <input type="tel" id="phone" name="phone" placeholder="07700 900000" autocomplete="tel">
+
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Create a password" autocomplete="new-password">
+
+            <button id="btn_submit_register" class="btn-submit">Create Account</button>
+            <p id="error_msg"></p>
+
+            <p class="form-footer">Already have an account? <a href="/login">Sign in here</a></p>
+        </div>
+    </div>
+
+    <script>
+        const daySelect = document.querySelector("#dob_day");
+        for (let d = 1; d <= 31; d++) {
+            const opt = document.createElement("option");
+            opt.value = d;
+            opt.textContent = d;
+            daySelect.appendChild(opt);
+        }
+    </script>
+    <script src="./src/register.js"></script>
+</body>
 </html>

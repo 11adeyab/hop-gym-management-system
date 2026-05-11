@@ -1,17 +1,259 @@
 <!DOCTYPE html>
-<html>
-    <head>
-    <link rel="stylesheet" href="style.css">
-    </head>
-        <body>
-            <nav>
-                <ul>
-                    <li id="nav_home">Home</li>
-                    <li id="nav_login">Login</li>
-                    <li id="nav_register">Register</li>
-                </ul>
-            </nav>
-            <script src="script.js"></script>
-        </body>
-    </head>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HOP Boxing Academy</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary:    #0F71F0;
+            --primary-bg: #B2D4FC;
+            --bg:         #F4F4F4;
+            --white:      #FFFFFF;
+            --border:     #E0E0E0;
+            --text:       #1A1A1A;
+            --muted:      #A1A1A1;
+            --danger:     #D40404;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Nav ── */
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 48px;
+            height: 56px;
+            background: var(--white);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .nav-logo {
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 0;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: var(--muted);
+            text-decoration: none;
+            padding: 0 18px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border-left: 1px solid var(--border);
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .nav-links a:hover { color: var(--text); background: var(--bg); }
+
+        .nav-links .nav-cta {
+            background: var(--primary);
+            color: var(--white);
+            font-weight: 700;
+        }
+
+        .nav-links .nav-cta:hover { background: #0a5ec4; color: var(--white); }
+
+        /* ── Hero ── */
+        .hero {
+            background: var(--primary);
+            color: var(--white);
+            padding: 96px 48px;
+            text-align: center;
+        }
+
+        .hero-inner { max-width: 680px; margin: 0 auto; }
+
+        .hero-eyebrow {
+            font-size: 0.7rem;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: var(--primary-bg);
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+
+        .hero h1 {
+            font-size: 3.2rem;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+        }
+
+        .hero p {
+            font-size: 1rem;
+            color: rgba(255,255,255,0.75);
+            line-height: 1.75;
+            margin-bottom: 40px;
+            max-width: 540px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-white {
+            background: var(--white);
+            color: var(--primary);
+            border: none;
+            padding: 14px 36px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            text-decoration: none;
+            letter-spacing: 0.03em;
+            display: inline-block;
+            transition: background 0.15s;
+        }
+
+        .btn-white:hover { background: var(--primary-bg); }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--white);
+            border: 1.5px solid rgba(255,255,255,0.45);
+            padding: 14px 36px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: border-color 0.15s;
+        }
+
+        .btn-ghost:hover { border-color: var(--white); }
+
+        /* ── Stats strip ── */
+        .stats {
+            display: flex;
+            background: var(--white);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .stat {
+            flex: 1;
+            padding: 32px 24px;
+            text-align: center;
+            border-right: 1px solid var(--border);
+        }
+
+        .stat:last-child { border-right: none; }
+
+        .stat-num {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: var(--primary);
+            letter-spacing: -0.02em;
+        }
+
+        .stat-label {
+            font-size: 0.72rem;
+            color: var(--muted);
+            margin-top: 4px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        /* ── Footer ── */
+        footer {
+            margin-top: auto;
+            text-align: center;
+            padding: 20px;
+            color: var(--muted);
+            font-size: 0.78rem;
+            border-top: 1px solid var(--border);
+            background: var(--white);
+        }
+
+        /* ── Mobile ── */
+        @media (max-width: 640px) {
+            nav { padding: 0 16px; }
+            .nav-links a { padding: 0 14px; font-size: 0.8rem; }
+            .hero { padding: 64px 24px; }
+            .hero h1 { font-size: 2.2rem; }
+            .stats { flex-wrap: wrap; }
+            .stat { min-width: 50%; border-bottom: 1px solid var(--border); }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <a href="/" class="nav-logo">HOP Boxing</a>
+        <div class="nav-links">
+            <a href="/login">Login</a>
+            <a href="/register" class="nav-cta">Join Now</a>
+        </div>
+    </nav>
+
+    <div class="hero">
+        <div class="hero-inner">
+            <p class="hero-eyebrow">Heart of Portsmouth Boxing</p>
+            <h1>Don't think you can,<br>know you can.</h1>
+            <p>Professional boxing training for all ages and experience levels. Whether you're just starting out or sharpening your skills, HOP Boxing Academy has a session for you.</p>
+            <div class="hero-actions">
+                <a href="/register" class="btn-white">Join Now</a>
+                <a href="/login" class="btn-ghost">Already a Member?</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <div class="stat-num">All Ages</div>
+            <div class="stat-label">Welcome</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num">1–2 hr</div>
+            <div class="stat-label">Sessions</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num">Expert</div>
+            <div class="stat-label">Instructors</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num">Online</div>
+            <div class="stat-label">Booking</div>
+        </div>
+    </div>
+
+    <footer>&copy; 2025 HOP Boxing Academy &middot; Portsmouth</footer>
+
+</body>
 </html>
