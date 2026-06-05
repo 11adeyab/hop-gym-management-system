@@ -492,6 +492,35 @@
         .mem-detail-row:last-child { border-bottom: none; }
         .mem-label { font-weight: 700; color: var(--muted); font-size: 0.78rem; }
 
+        .mem-section-head {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+
+        .gym-mem-options { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+
+        .gym-mem-option {
+            flex: 1;
+            min-width: 160px;
+            border: 1px solid var(--border);
+            padding: 16px;
+            background: var(--bg);
+            cursor: pointer;
+            text-align: left;
+            font-family: inherit;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .gym-mem-option:hover { border-color: var(--primary); background: var(--primary-bg); }
+
+        .gym-mem-option-label { font-size: 0.82rem; font-weight: 700; margin-bottom: 4px; }
+        .gym-mem-option-price { font-size: 1rem; font-weight: 800; color: var(--primary); }
+        .gym-mem-option-desc  { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+
         #mem_purchase_section { max-width: 400px; }
         #mem_purchase_section h3 { margin-bottom: 16px; }
 
@@ -640,6 +669,18 @@
 
             .filter-tabs button { font-size: 0.78rem; padding: 9px 8px; }
         }
+
+        /* ── Scan result cards (check-in) ── */
+        .scan-result-card {
+            padding: 18px 20px;
+            border: 1px solid var(--border);
+            margin-top: 16px;
+            max-width: 500px;
+        }
+        .scan-result-card p { font-size: 1rem; margin-bottom: 14px; font-weight: 600; }
+        .scan-ok   { background: rgba(22,163,74,0.10);  border-color: rgba(22,163,74,0.3);  color: #16A34A; }
+        .scan-warn { background: rgba(217,119,6,0.10);  border-color: rgba(217,119,6,0.3);  color: #D97706; }
+        .scan-fail { background: rgba(212,4,4,0.08);    border-color: rgba(212,4,4,0.3);    color: var(--danger); }
     </style>
 </head>
 <body>
@@ -654,7 +695,9 @@
                 <a href="#" id="nav_overview">Overview</a>
                 <a href="#" id="nav_book_sessions">Book Sessions</a>
                 <a href="#" id="nav_my_bookings">My Bookings</a>
-                <a href="#" id="nav_membership">Membership</a>
+                <a href="#" id="nav_gym_membership">Gym Membership</a>
+                <a href="#" id="nav_session_passes">Session Passes</a>
+                <a href="#" id="nav_checkin">Check In</a>
             </nav>
             <div class="sidebar-footer">
                 <a href="/logout" class="nav-logout">Log out</a>
@@ -719,48 +762,81 @@
         <div id="bookings_list"></div>
     </template>
 
-    <template id="template_membership">
-        <h2>My Membership</h2>
+    <template id="template_gym_membership">
+        <h2>Gym Membership</h2>
 
         <div class="membership-card">
-            <span id="mem_status_badge" class="mem-status-badge mem-status-inactive">No Active Membership</span>
-            <div class="mem-detail-row">
-                <span class="mem-label">Membership ID</span>
-                <span id="mem_id">—</span>
-            </div>
-            <div class="mem-detail-row">
-                <span class="mem-label">Type</span>
-                <span id="mem_type">—</span>
-            </div>
-            <div class="mem-detail-row">
-                <span class="mem-label">Start Date</span>
-                <span id="mem_start_date">—</span>
-            </div>
-            <div class="mem-detail-row">
-                <span class="mem-label">End Date</span>
-                <span id="mem_end_date">—</span>
-            </div>
-            <div id="mem_qr_btn_section" style="display:none; margin-top:14px;">
-                <button id="btn_mem_qr" class="btn-ghost btn-sm">View Membership QR</button>
+            <span id="gym_mem_badge" class="mem-status-badge mem-status-inactive">No Active Membership</span>
+            <div id="gym_mem_details" style="display:none;">
+                <div class="mem-detail-row">
+                    <span class="mem-label">Type</span>
+                    <span id="gym_mem_type">—</span>
+                </div>
+                <div class="mem-detail-row">
+                    <span class="mem-label">Valid Until</span>
+                    <span id="gym_mem_end_date">—</span>
+                </div>
             </div>
         </div>
 
-        <div id="mem_purchase_section" style="display:none">
-            <h3>Purchase a Membership</h3>
-            <label for="mem_type_select">Membership Type</label>
+        <div id="gym_mem_purchase_section">
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:16px;">One-time annual joining fee. Valid for one year from the date of purchase.</p>
+            <div class="gym-mem-options">
+                <button id="btn_join_non_carded" class="gym-mem-option">
+                    <div class="gym-mem-option-label">Non-Carded Boxer</div>
+                    <div class="gym-mem-option-price" id="price_non_carded">—</div>
+                    <div class="gym-mem-option-desc">Annual gym membership</div>
+                </button>
+                <button id="btn_join_carded" class="gym-mem-option">
+                    <div class="gym-mem-option-label">Carded Boxer</div>
+                    <div class="gym-mem-option-price" id="price_carded">—</div>
+                    <div class="gym-mem-option-desc">Annual gym membership</div>
+                </button>
+            </div>
+            <p id="gym_mem_error_msg" class="error-msg"></p>
+        </div>
+    </template>
+
+    <template id="template_session_passes">
+        <h2>Session Passes</h2>
+
+        <div class="membership-card">
+            <span id="mem_status_badge" class="mem-status-badge mem-status-inactive">No Active Pass</span>
+            <div id="pass_details" style="display:none;">
+                <div class="mem-detail-row">
+                    <span class="mem-label">Type</span>
+                    <span id="mem_type">—</span>
+                </div>
+                <div class="mem-detail-row">
+                    <span class="mem-label">Start Date</span>
+                    <span id="mem_start_date">—</span>
+                </div>
+                <div class="mem-detail-row">
+                    <span class="mem-label">End Date</span>
+                    <span id="mem_end_date">—</span>
+                </div>
+                <div style="margin-top:14px;">
+                    <button id="btn_mem_qr" class="btn-ghost btn-sm">View Pass QR</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="mem_purchase_section">
+            <h3 style="margin-bottom:16px;">Purchase a Session Pass</h3>
+            <label for="mem_type_select">Pass Type</label>
             <select id="mem_type_select">
-                <option value="day">Day Pass — £5.00</option>
-                <option value="weekly">Weekly Pass — £20.00</option>
-                <option value="monthly">Monthly Pass — £50.00</option>
+                <option value="day">Day Pass</option>
+                <option value="weekly">Weekly Pass</option>
+                <option value="monthly">Monthly Pass</option>
             </select>
             <label for="mem_start_input">Start Date</label>
             <input type="date" id="mem_start_input">
-            <button id="btn_purchase_membership" class="btn-primary" style="margin-top:10px;">Purchase — £5.00</button>
+            <button id="btn_purchase_membership" class="btn-primary" style="margin-top:10px;">Purchase</button>
             <p id="mem_error_msg" class="error-msg"></p>
         </div>
 
-        <div id="covered_sessions_section" style="display:none">
-            <h3 style="margin:24px 0 12px;">Sessions Covered by Your Membership</h3>
+        <div id="covered_sessions_section" style="display:none;">
+            <h3 style="margin:24px 0 12px;">Sessions Covered by Your Pass</h3>
             <table>
                 <thead>
                     <tr>
@@ -776,6 +852,14 @@
         </div>
     </template>
 
+
+    <template id="template_checkin">
+        <h2>Check In</h2>
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:20px;">Scan the session QR code displayed at the venue entrance to record your attendance.</p>
+        <button id="btn_start_checkin_scanner" class="btn-primary">Start Scanner</button>
+        <div id="checkin_scanner_container" style="margin-top:20px;max-width:500px;"></div>
+        <div id="checkin_scan_result" style="margin-top:16px;"></div>
+    </template>
 
     <div id="modal_overlay" class="modal-overlay">
         <div id="modal_box" class="modal-box">
@@ -814,13 +898,13 @@
 
             <div class="modal-price">
                 <span>Booking fee</span>
-                <strong>£3.00</strong>
+                <strong id="modal_price_display">—</strong>
             </div>
 
             <p id="error_msg" class="error-msg"></p>
 
             <div class="modal-actions">
-                <button id="modal_btn_book" class="btn-primary">Book — £3.00</button>
+                <button id="modal_btn_book" class="btn-primary">Book</button>
                 <button id="modal_btn_close" class="btn-ghost">Cancel</button>
             </div>
         </div>
@@ -855,6 +939,7 @@
         </div>
     </div>
 
+    <script src="/node_modules/html5-qrcode/html5-qrcode.min.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

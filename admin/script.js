@@ -39,6 +39,7 @@ document.querySelector("#nav_timetable").addEventListener("click", () => showVie
 document.querySelector("#nav_customers").addEventListener("click", () => showView("customers"));
 document.querySelector("#nav_staff").addEventListener("click", () => showView("staff"));
 document.querySelector("#nav_reports").addEventListener("click", () => showView("reports"));
+document.querySelector("#nav_pricing").addEventListener("click", () => showView("pricing"));
 
 // Show the QR scanner by default when the admin page first loads
 showView("qr_scanner");
@@ -80,6 +81,8 @@ async function showView(viewName) {
         loadStaff();
     } else if (viewName === "reports") {
         loadReports("all");
+    } else if (viewName === "pricing") {
+        loadPricing();
     }
 }
 
@@ -113,8 +116,8 @@ async function onScanSuccess(decodedText) {
     await scanner.clear();
     scanner = null;
 
-    // Send the QR code value to the server to record attendance
-    const req = await fetch("/attendance", {
+    // Send the scanned QR code to the membership verification endpoint
+    const req = await fetch("/api/admin/verify-membership", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decodedText: decodedText })
@@ -195,56 +198,110 @@ async function refreshTimetable() {
     }
 }
 
-// Filters allAdminSessions to the currently visible week and renders them as table rows.
+// Builds a 7-column weekly calendar grid. Each day column contains admin session
+// cards with inline QR / Edit / Delete actions — no scrolling through a long list.
 function renderTimetable() {
     const { start, end } = getAdminWeekRange(adminWeekOffset);
 
-    // Update the week label text (e.g. "5 May 2025 – 11 May 2025")
     const startLabel = start.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
     const endLabel   = end.toLocaleDateString(  "en-GB", { day: "numeric", month: "short", year: "numeric" });
     document.querySelector("#week_label").textContent = startLabel + " – " + endLabel;
 
-    // Keep only sessions whose date falls within the selected week
-    const weekSessions = allAdminSessions.filter(session => {
-        const d = new Date(session.start_date + "T00:00:00");
-        return d >= start && d <= end;
-    });
+    const grid     = document.querySelector("#calendar_grid");
+    const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const todayStr = (() => {
+        const t = new Date();
+        return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0");
+    })();
 
-    const tbody = document.querySelector("#timetable_body");
-    tbody.innerHTML = "";
+    grid.innerHTML = "";
 
-    if (weekSessions.length === 0) {
-        tbody.innerHTML = "<tr><td colspan='9'>No sessions this week.</td></tr>";
-        return;
-    }
+    for (let d = 0; d < 7; d++) {
+        const dayDate = new Date(start);
+        dayDate.setDate(start.getDate() + d);
+        const dayStr =
+            dayDate.getFullYear() + "-" +
+            String(dayDate.getMonth() + 1).padStart(2, "0") + "-" +
+            String(dayDate.getDate()).padStart(2, "0");
 
-    // Build one table row per session with Edit and Delete buttons
-    for (let session of weekSessions) {
-        // Strip seconds from the stored "HH:MM:SS" time so we show "HH:MM"
-        const time = session.start_time.split(":").slice(0, 2).join(":");
-        const row  = document.createElement("tr");
-        row.innerHTML =
-            "<td>" + session.session_name + "</td>" +
-            "<td>" + session.start_date + "</td>" +
-            "<td>" + time + "</td>" +
-            "<td>" + session.duration + " hr" + "</td>" +
-            "<td>" + session.instructor + "</td>" +
-            "<td>" + session.capacity + "</td>" +
-            "<td>" + session.gender_eligibility + "</td>" +
-            "<td>" + session.min_age + "–" + session.max_age + "</td>" +
-            "<td style='display:flex;gap:6px;'>" +
-                "<button id='btn_edit_"   + session.session_id + "' class='btn-secondary'>Edit</button>" +
-                "<button id='btn_delete_" + session.session_id + "' class='btn-danger'>Delete</button>" +
-            "</td>";
+        const daySessions = allAdminSessions
+            .filter(s => s.start_date === dayStr)
+            .sort((a, b) => a.start_time.localeCompare(b.start_time));
 
-        tbody.appendChild(row);
+        const col = document.createElement("div");
+        col.className = "cal-col";
 
-        // Wire Edit and Delete buttons for this specific session
-        document.querySelector("#btn_edit_" + session.session_id).addEventListener("click", () => openSessionModal(session));
-        document.querySelector("#btn_delete_" + session.session_id).addEventListener("click", () => openDeleteModal(session));
+        const isToday = dayStr === todayStr;
+        col.innerHTML =
+            "<div class='cal-header'>" +
+                "<span class='cal-day-name'>" + dayNames[d] + "</span>" +
+                "<span class='cal-day-date" + (isToday ? " today" : "") + "'>" +
+                    dayDate.getDate() + " " + dayDate.toLocaleDateString("en-GB", { month: "short" }) +
+                "</span>" +
+            "</div>" +
+            "<div class='cal-sessions'></div>";
+
+        const sessionsContainer = col.querySelector(".cal-sessions");
+
+        if (daySessions.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "cal-empty";
+            empty.textContent = "—";
+            sessionsContainer.appendChild(empty);
+        } else {
+            for (const session of daySessions) {
+                const time = session.start_time.split(":").slice(0, 2).join(":");
+                const card = document.createElement("div");
+                card.className = "admin-session-card";
+                card.innerHTML =
+                    "<div class='admin-card-name'>" + session.session_name + "</div>" +
+                    "<div class='admin-card-time'>" + time + " &middot; " + session.duration + " hr</div>" +
+                    "<div class='admin-card-instructor'>" + session.instructor + "</div>" +
+                    "<div class='admin-card-meta'>" +
+                        session.capacity + " spaces &middot; " +
+                        session.gender_eligibility + " &middot; " +
+                        session.min_age + "–" + session.max_age + " yrs &middot; " +
+                        (session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—") +
+                    "</div>" +
+                    "<div class='admin-card-actions'>" +
+                        "<button class='btn-card-qr'>QR</button>" +
+                        "<button class='btn-card-edit'>Edit</button>" +
+                        "<button class='btn-card-delete'>Delete</button>" +
+                    "</div>";
+
+                card.querySelector(".btn-card-qr").addEventListener(    "click", (e) => { e.stopPropagation(); openSessionQRModal(session); });
+                card.querySelector(".btn-card-edit").addEventListener(   "click", (e) => { e.stopPropagation(); openSessionModal(session); });
+                card.querySelector(".btn-card-delete").addEventListener( "click", (e) => { e.stopPropagation(); openDeleteModal(session); });
+
+                sessionsContainer.appendChild(card);
+            }
+        }
+
+        grid.appendChild(col);
     }
 }
 
+
+// Fetches the session's QR code image from the server and shows it in a modal.
+async function openSessionQRModal(session) {
+    const modal     = document.querySelector("#session_qr_modal");
+    const titleEl   = document.querySelector("#session_qr_title");
+    const imgEl     = document.querySelector("#session_qr_image");
+    const closeBtn  = document.querySelector("#btn_close_session_qr");
+
+    titleEl.textContent = session.session_name + " — " + session.start_date;
+    imgEl.src = "";
+    modal.style.display = "flex";
+
+    const req = await fetch("/api/admin/sessions/" + session.session_id + "/qr");
+    if (req.ok) {
+        const res = await req.json();
+        imgEl.src = res.qr;
+    }
+
+    closeBtn.onclick = () => { modal.style.display = "none"; };
+    modal.onclick    = (e) => { if (e.target === modal) modal.style.display = "none"; };
+}
 
 // Opens the session form modal. If session is null the form is blank (add mode).
 // If session is an object, the fields are pre-filled with its values (edit mode).
@@ -265,6 +322,7 @@ function openSessionModal(session) {
         document.querySelector("#form_gender").value = session.gender_eligibility;
         document.querySelector("#form_min_age").value = session.min_age;
         document.querySelector("#form_max_age").value = session.max_age;
+        document.querySelector("#form_price").value   = session.price_pence != null ? (session.price_pence / 100).toFixed(2) : "";
     } else {
         // Add mode — clear the form and reset the editing ID
         editingSessionId = null;
@@ -278,6 +336,7 @@ function openSessionModal(session) {
         document.querySelector("#form_gender").value = "Any";
         document.querySelector("#form_min_age").value = "";
         document.querySelector("#form_max_age").value = "";
+        document.querySelector("#form_price").value   = "";
     }
 
     document.querySelector("#modal_session_overlay").classList.add("open");
@@ -300,8 +359,9 @@ async function saveSession() {
         instructor: document.querySelector("#form_instructor").value,
         capacity: Number(document.querySelector("#form_capacity").value),
         gender_eligibility: document.querySelector("#form_gender").value,
-        min_age: Number(document.querySelector("#form_min_age").value),
-        max_age: Number(document.querySelector("#form_max_age").value)
+        min_age:     Number(document.querySelector("#form_min_age").value),
+        max_age:     Number(document.querySelector("#form_max_age").value),
+        price_pence: Math.round(parseFloat(document.querySelector("#form_price").value) * 100) || 0
     };
 
     let req;
@@ -359,6 +419,9 @@ async function deleteSession(sessionId) {
 
     if (req.ok) {
         refreshTimetable();
+    } else {
+        const fail = await req.json();
+        alert(fail.message || "Delete failed. Please try again.");
     }
 }
 
@@ -797,12 +860,13 @@ async function deleteAccount(userId, type) {
     if (req.ok) {
         if (type === "staff") {
             const res = await fetch("/api/admin/staff");
-            if (res.ok) {
-                renderStaff((await res.json()).data);
-            } else {
-                loadCustomers();
-            }
+            if (res.ok) renderStaff((await res.json()).data);
+        } else {
+            loadCustomers();
         }
+    } else {
+        const fail = await req.json();
+        alert(fail.message || "Delete failed. Please try again.");
     }
 }
 
@@ -834,24 +898,23 @@ async function loadReports(filter) {
 
     renderReports(payments);
 
-    // Wire filter tabs — each one re-fetches with its filter
-    document.querySelector("#report_tab_all").addEventListener("click", () => {
+    // Use onclick so re-entering this function replaces the handler rather than stacking listeners
+    document.querySelector("#report_tab_all").onclick = () => {
         setReportTabActive("all");
         loadReports("all");
-    });
-    document.querySelector("#report_tab_bookings").addEventListener("click", () => {
+    };
+    document.querySelector("#report_tab_bookings").onclick = () => {
         setReportTabActive("bookings");
         loadReports("bookings");
-    });
-    document.querySelector("#report_tab_memberships").addEventListener("click", () => {
+    };
+    document.querySelector("#report_tab_memberships").onclick = () => {
         setReportTabActive("memberships");
         loadReports("memberships");
-    });
+    };
 
-    // CSV export button — generates a download from the currently displayed data
-    document.querySelector("#btn_export_csv").addEventListener("click", () => {
+    document.querySelector("#btn_export_csv").onclick = () => {
         exportCSV(currentReportPayments, currentReportFilter);
-    });
+    };
 
     setReportTabActive(filter);
 }
@@ -938,6 +1001,49 @@ function getAdminWeekRange(offset) {
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
     end.setHours(23, 59, 59, 999);
-    
     return { start, end };
+}
+
+
+// ── Pricing ───────────────────────────────────────────────────────────────────
+
+async function loadPricing() {
+    const req = await fetch("/api/pricing");
+    if (!req.ok) return;
+    const res  = await req.json();
+    const rows = res.data;
+
+    for (const row of rows) {
+        const input = document.querySelector("#price_" + row.price_key);
+        if (input) input.value = (row.value_pence / 100).toFixed(2);
+    }
+
+    document.querySelector("#btn_save_pricing").onclick = () => savePricing(rows.map(r => r.price_key));
+}
+
+async function savePricing(keys) {
+    const payload = {};
+    for (const key of keys) {
+        const input = document.querySelector("#price_" + key);
+        if (input) payload[key] = input.value;
+    }
+
+    const btn = document.querySelector("#btn_save_pricing");
+    const msg = document.querySelector("#pricing_msg");
+    btn.disabled    = true;
+    btn.textContent = "Saving...";
+    msg.textContent = "";
+    msg.style.color = "";
+
+    const req = await fetch("/api/admin/pricing", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+
+    const res = await req.json();
+    msg.textContent = res.message;
+    msg.style.color = req.ok ? "var(--success)" : "var(--danger)";
+    btn.disabled    = false;
+    btn.textContent = "Save Prices";
 }

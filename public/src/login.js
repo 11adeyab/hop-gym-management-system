@@ -1,6 +1,6 @@
 document.querySelector("#btn_submit_login").addEventListener("click", () => {
     loginUser({
-        email:    document.querySelector("#email").value,
+        email: document.querySelector("#email").value,
         password: document.querySelector("#password").value
     });
 });

@@ -1,8 +1,9 @@
 //variables that track what the user is currently viewing
-let allSessions = []; // all sessions fetched from the server
-let allBookings = []; // all bookings fetched from the server
-let weekOffset = 0; // 0 = current week, -1 = last week, +1 = next week
-let activeFilter = "upcoming"; // which booking filter is selected
+let allSessions    = [];
+let allBookings    = [];
+let weekOffset     = 0;
+let activeFilter   = "upcoming";
+let checkinScanner = null;
 
 
 // Hamburger menu toggle (mobile)
@@ -34,29 +35,31 @@ for (const link of document.querySelectorAll("nav a")) {
     }
 })();
 
-document.querySelector("#nav_overview").addEventListener("click", () => showView("overview"));
-document.querySelector("#nav_book_sessions").addEventListener("click", () => showView("book_sessions"));
-document.querySelector("#nav_my_bookings").addEventListener("click", () => showView("my_bookings"));
-document.querySelector("#nav_membership").addEventListener("click", () => showView("membership"));
+document.querySelector("#nav_overview").addEventListener("click",        () => showView("overview"));
+document.querySelector("#nav_book_sessions").addEventListener("click",    () => showView("book_sessions"));
+document.querySelector("#nav_my_bookings").addEventListener("click",      () => showView("my_bookings"));
+document.querySelector("#nav_gym_membership").addEventListener("click",   () => showView("gym_membership"));
+document.querySelector("#nav_session_passes").addEventListener("click",   () => showView("session_passes"));
+document.querySelector("#nav_checkin").addEventListener("click",          () => showView("checkin"));
 
 showView("overview");
 
 
-function showView(viewName) {
-    // Highlight the active nav link
+async function showView(viewName) {
+    // Stop the check-in scanner if it's running before leaving the view
+    if (checkinScanner !== null) {
+        try { await checkinScanner.clear(); } catch (_) {}
+        checkinScanner = null;
+    }
 
     for (let i of document.querySelectorAll("nav a")) {
         i.classList.remove("active");
     }
     document.querySelector("#nav_" + viewName).classList.add("active");
 
-    // Get the template for this view
     const template = document.querySelector("#template_" + viewName);
+    const content  = template.content.cloneNode(true);
 
-    // cloneNode(true) makes a full copy of everything inside the template
-    const content = template.content.cloneNode(true);
-
-    // Clear main and insert the cloned content
     const main = document.querySelector("#main_content");
     main.innerHTML = "";
     main.appendChild(content);
@@ -71,8 +74,14 @@ function showView(viewName) {
     else if (viewName === "my_bookings") {
         loadMyBookings();
     }
-    else if (viewName === "membership") {
-        loadMembership();
+    else if (viewName === "gym_membership") {
+        loadGymMembership();
+    }
+    else if (viewName === "session_passes") {
+        loadSessionPasses();
+    }
+    else if (viewName === "checkin") {
+        loadCheckin();
     }
 }
 
@@ -88,11 +97,11 @@ async function loadOverview() {
     });
     document.querySelector("#greeting_date").textContent = dateStr;
 
-    // Fetch user info, all bookings, and membership status in parallel
-    const [userReq, bookingsReq, membershipReq] = await Promise.all([
+    const [userReq, bookingsReq, membershipReq, gymReq] = await Promise.all([
         fetch("/api/user"),
         fetch("/api/bookings"),
-        fetch("/api/membership")
+        fetch("/api/membership"),
+        fetch("/api/gym-membership")
     ]);
 
     // Set greeting using the user's first name
@@ -124,13 +133,22 @@ async function loadOverview() {
     document.querySelector("#stat_total_bookings").textContent  = bookings.length;
     document.querySelector("#stat_attendance_rate").textContent = attendanceRate;
 
-    // Membership status
+    // Gym membership status for the overview stat
     let membershipLabel = "None";
+    if (gymReq.ok) {
+        const d = await gymReq.json();
+        if (d.data) {
+            const labels = { non_carded: "Non-Carded", carded: "Carded" };
+            membershipLabel = labels[d.data.membership_type] || "Active";
+        }
+    }
+    // Show session pass alongside if active
     if (membershipReq.ok) {
         const d = await membershipReq.json();
         if (d.data) {
-            const labels = { day: "Day Pass", weekly: "Weekly", monthly: "Monthly" };
-            membershipLabel = labels[d.data.membership_type] || "Active";
+            const passLabels = { day: "Day Pass", weekly: "Weekly", monthly: "Monthly" };
+            const passLabel  = passLabels[d.data.membership_type] || "Pass";
+            membershipLabel  = membershipLabel === "None" ? passLabel : membershipLabel + " + " + passLabel;
         }
     }
     document.querySelector("#stat_membership").textContent = membershipLabel;
@@ -232,10 +250,11 @@ function renderTimetable() {
             for (let session of daySessions) {
                 const card = document.createElement("div");
                 card.className = "session-card";
+                const cardPrice = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "";
                 card.innerHTML =
                     "<div class='session-card-name'>" + session.session_name + "</div>" +
                     "<div class='session-card-time'>" + session.start_time.split(":").slice(0, 2).join(":") + "</div>" +
-                    "<div class='session-card-spaces'>" + session.capacity + " spaces</div>";
+                    "<div class='session-card-spaces'>" + session.capacity + " spaces" + (cardPrice ? " &middot; " + cardPrice : "") + "</div>";
                 card.addEventListener("click", () => openModal(session));
                 sessionsContainer.appendChild(card);
             }
@@ -256,12 +275,13 @@ function openModal(session) {
     document.querySelector("#modal_gender").textContent = session.gender_eligibility;
     document.querySelector("#modal_age").textContent = session.min_age + " to " + session.max_age + " years";
 
+    const priceLabel = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—";
+    document.querySelector("#modal_price_display").textContent = priceLabel;
+    document.querySelector("#modal_btn_book").textContent = "Book — " + priceLabel;
+
     document.querySelector("#modal_overlay").classList.add("open");
 
-    document.querySelector("#modal_btn_book").onclick = () => {
-        bookSession(session);
-    };
-
+    document.querySelector("#modal_btn_book").onclick = () => bookSession(session);
     document.querySelector("#modal_btn_close").onclick = () => {
         document.querySelector("#modal_overlay").classList.remove("open");
     };
@@ -286,8 +306,9 @@ async function bookSession(session) {
     } else {
         // Show the validation error inside the modal and re-enable the button
         const fail = await req.json();
+        const priceLabel = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—";
         document.querySelector("#error_msg").textContent = fail.message;
-        document.querySelector("#modal_btn_book").textContent = "Book — £3.00";
+        document.querySelector("#modal_btn_book").textContent = "Book — " + priceLabel;
         document.querySelector("#modal_btn_book").disabled = false;
     }
 }
@@ -365,6 +386,8 @@ function renderBookings() {
             const checkinTime = String(checkinDate.getHours()).padStart(2, "0") + ":" + String(checkinDate.getMinutes()).padStart(2, "0");
             if (checkinTime > time) {
                 attendanceLabel = "<p>Checked in at " + checkinTime + " — <strong>Late</strong></p>";
+            } else if (checkinTime < time) {
+                attendanceLabel = "<p>Checked in at " + checkinTime + " — <strong>Early</strong></p>";
             } else {
                 attendanceLabel = "<p>Checked in at " + checkinTime + " — <strong>On time</strong></p>";
             }
@@ -378,9 +401,9 @@ function renderBookings() {
             "</div>";
 
         if (activeFilter !== "attended") {
-            let buttonsHtml = "<button id='btn_qr_" + booking.booking_id + "'>View QR</button>";
+            let buttonsHtml = "<button id='btn_qr_" + booking.booking_id + "' class='btn-ghost btn-sm'>View QR</button>";
             if (activeFilter === "upcoming") {
-                buttonsHtml += "<button id='btn_cancel_" + booking.booking_id + "'>Cancel</button>";
+                buttonsHtml += "<button id='btn_cancel_" + booking.booking_id + "' class='btn-danger btn-sm'>Cancel</button>";
             }
             card.innerHTML += "<div>" + buttonsHtml + "</div>";
         }
@@ -432,55 +455,129 @@ function openCancelModal(booking) {
 }
 
 async function cancelBooking(bookingId) {
-    await fetch("/api/bookings", {
+    const req = await fetch("/api/bookings", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ booking_id: bookingId })
     });
-    loadMyBookings();
-}
-
-async function loadMembership() {
-    const req = await fetch("/api/membership");
     if (req.ok) {
-        const res = await req.json();
-        renderMembership(res.data);
+        loadMyBookings();
+    } else {
+        const fail = await req.json();
+        const list  = document.querySelector("#bookings_list");
+        const err   = document.createElement("p");
+        err.style.cssText = "color:var(--danger);font-size:0.85rem;margin-bottom:12px;";
+        err.textContent   = fail.message || "Cancellation failed. Please try again.";
+        list.prepend(err);
     }
 }
 
-function renderMembership(membership) {
+async function loadGymMembership() {
+    const [gymReq, pricingReq] = await Promise.all([
+        fetch("/api/gym-membership"),
+        fetch("/api/pricing")
+    ]);
+
+    const prices = {};
+    if (pricingReq.ok) {
+        const pd = await pricingReq.json();
+        for (const row of pd.data) prices[row.price_key] = row.value_pence;
+    }
+
+    const gymData = gymReq.ok ? (await gymReq.json()).data : null;
+    renderGymMembership(gymData, prices);
+}
+
+async function loadSessionPasses() {
+    const [passReq, pricingReq] = await Promise.all([
+        fetch("/api/membership"),
+        fetch("/api/pricing")
+    ]);
+
+    const prices = {};
+    if (pricingReq.ok) {
+        const pd = await pricingReq.json();
+        for (const row of pd.data) prices[row.price_key] = row.value_pence;
+    }
+
+    const passData = passReq.ok ? (await passReq.json()).data : null;
+    renderSessionPass(passData, prices);
+}
+
+function renderGymMembership(membership, prices) {
+    const badge      = document.querySelector("#gym_mem_badge");
+    const details    = document.querySelector("#gym_mem_details");
+    const purchaseSec = document.querySelector("#gym_mem_purchase_section");
+
+    const typeLabels = { non_carded: "Non-Carded Boxer", carded: "Carded Boxer" };
+
+    if (membership) {
+        badge.textContent = "Active";
+        badge.className   = "mem-status-badge mem-status-active";
+        details.style.display   = "block";
+        purchaseSec.style.display = "none";
+        document.querySelector("#gym_mem_type").textContent     = typeLabels[membership.membership_type] || membership.membership_type;
+        document.querySelector("#gym_mem_end_date").textContent = membership.end_date;
+    } else {
+        badge.textContent = "No Active Membership";
+        badge.className   = "mem-status-badge mem-status-inactive";
+        details.style.display   = "none";
+        purchaseSec.style.display = "block";
+
+        const fmt = p => p ? "£" + (p / 100).toFixed(2) : "—";
+        document.querySelector("#price_non_carded").textContent = fmt(prices.membership_non_carded);
+        document.querySelector("#price_carded").textContent     = fmt(prices.membership_carded);
+
+        document.querySelector("#btn_join_non_carded").onclick = () => purchaseGymMembership("non_carded");
+        document.querySelector("#btn_join_carded").onclick     = () => purchaseGymMembership("carded");
+    }
+}
+
+async function purchaseGymMembership(type) {
+    document.querySelector("#gym_mem_error_msg").textContent = "";
+    const btn = document.querySelector("#btn_join_" + (type === "non_carded" ? "non_carded" : "carded"));
+    btn.disabled = true;
+    btn.querySelector(".gym-mem-option-label").textContent = "Redirecting...";
+
+    const req = await fetch("/api/gym-membership/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ membership_type: type })
+    });
+
+    if (req.ok) {
+        window.location.href = (await req.json()).url;
+    } else {
+        const fail = await req.json();
+        document.querySelector("#gym_mem_error_msg").textContent = fail.message;
+        btn.disabled = false;
+        btn.querySelector(".gym-mem-option-label").textContent = type === "non_carded" ? "Non-Carded Boxer" : "Carded Boxer";
+    }
+}
+
+function renderSessionPass(membership, prices) {
+    const typeLabels = { day: "Day Pass", weekly: "Weekly Pass", monthly: "Monthly Pass" };
+
     if (membership) {
         const badge = document.querySelector("#mem_status_badge");
         badge.textContent = "Active";
-        badge.className = "mem-status-badge mem-status-active";
+        badge.className   = "mem-status-badge mem-status-active";
 
-        document.querySelector("#mem_id").textContent = membership.membership_id;
-        document.querySelector("#mem_start_date").textContent = membership.start_date;
-        document.querySelector("#mem_end_date").textContent = membership.end_date;
-
-        if (membership.membership_type === "day") {
-            document.querySelector("#mem_type").textContent = "Day Pass";
-        } else if (membership.membership_type === "weekly") {
-            document.querySelector("#mem_type").textContent = "Weekly Pass";
-        } else if (membership.membership_type === "monthly") {
-            document.querySelector("#mem_type").textContent = "Monthly Pass";
-        }
-
+        document.querySelector("#pass_details").style.display        = "block";
         document.querySelector("#mem_purchase_section").style.display = "none";
-        document.querySelector("#mem_qr_btn_section").style.display = "block";
+        document.querySelector("#mem_type").textContent       = typeLabels[membership.membership_type] || membership.membership_type;
+        document.querySelector("#mem_start_date").textContent = membership.start_date;
+        document.querySelector("#mem_end_date").textContent   = membership.end_date;
 
-        document.querySelector("#btn_mem_qr").addEventListener("click", () => {
-            openMembershipQRModal(membership);
-        });
+        document.querySelector("#btn_mem_qr").addEventListener("click", () => openPassQRModal(membership));
 
         document.querySelector("#covered_sessions_section").style.display = "block";
         const tbody = document.querySelector("#covered_sessions_body");
         tbody.innerHTML = "";
-
         if (membership.covered_sessions.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5'>No sessions scheduled within your membership period.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5'>No sessions scheduled within your pass period.</td></tr>";
         } else {
-            for (let session of membership.covered_sessions) {
+            for (const session of membership.covered_sessions) {
                 const row = document.createElement("tr");
                 row.innerHTML =
                     "<td>" + session.session_name + "</td>" +
@@ -492,56 +589,48 @@ function renderMembership(membership) {
             }
         }
     } else {
-        const badge = document.querySelector("#mem_status_badge");
-        badge.textContent = "No Active Membership";
-        badge.className = "mem-status-badge mem-status-inactive";
-
+        document.querySelector("#mem_status_badge").textContent  = "No Active Pass";
+        document.querySelector("#mem_status_badge").className    = "mem-status-badge mem-status-inactive";
+        document.querySelector("#pass_details").style.display    = "none";
         document.querySelector("#mem_purchase_section").style.display = "block";
 
         const today = new Date();
         const todayStr = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0");
-        document.querySelector("#mem_start_input").min = todayStr;
+        document.querySelector("#mem_start_input").min   = todayStr;
         document.querySelector("#mem_start_input").value = todayStr;
 
-        // Update button price text whenever the membership type changes
-        const prices = { day: "£5.00", weekly: "£20.00", monthly: "£50.00" };
-        document.querySelector("#mem_type_select").addEventListener("change", function() {
-            document.querySelector("#btn_purchase_membership").textContent = "Purchase — " + (prices[this.value] || "");
-        });
+        const fmt = key => prices[key] ? "£" + (prices[key] / 100).toFixed(2) : "";
+        const select = document.querySelector("#mem_type_select");
 
-        document.querySelector("#btn_purchase_membership").addEventListener("click", () => {
-            purchaseMembership();
-        });
+        // Update option labels and button text with live prices
+        for (const opt of select.options) {
+            opt.textContent = typeLabels[opt.value] + (fmt("pass_" + opt.value) ? " — " + fmt("pass_" + opt.value) : "");
+        }
+
+        const updateBtn = () => {
+            const price = fmt("pass_" + select.value);
+            document.querySelector("#btn_purchase_membership").textContent = "Purchase" + (price ? " — " + price : "");
+        };
+        updateBtn();
+        select.addEventListener("change", updateBtn);
+        document.querySelector("#btn_purchase_membership").addEventListener("click", () => purchaseSessionPass(prices));
     }
 }
 
-function openMembershipQRModal(membership) {
-    let typeLabel;
-    if (membership.membership_type === "day") {
-        typeLabel = "Day Pass";
-    } else if (membership.membership_type === "weekly") {
-        typeLabel = "Weekly Pass";
-    } else if (membership.membership_type === "monthly") {
-        typeLabel = "Monthly Pass";
-    }
-
-    document.querySelector("#modal_mem_qr_details").textContent = typeLabel + "  ·  " + membership.start_date + " to " + membership.end_date;
+function openPassQRModal(membership) {
+    const typeLabels = { day: "Day Pass", weekly: "Weekly Pass", monthly: "Monthly Pass" };
+    document.querySelector("#modal_mem_qr_details").textContent = (typeLabels[membership.membership_type] || membership.membership_type) + "  ·  " + membership.start_date + " to " + membership.end_date;
     document.querySelector("#modal_mem_qr_image").src = membership.qr_code;
-
     document.querySelector("#modal_mem_qr_overlay").classList.add("open");
-
     document.querySelector("#modal_mem_qr_btn_close").onclick = () => {
         document.querySelector("#modal_mem_qr_overlay").classList.remove("open");
     };
 }
 
-// Validates the membership on the server, then redirects the user to Stripe to pay.
-// The membership is only created in the database after payment is confirmed.
-async function purchaseMembership() {
+async function purchaseSessionPass(prices) {
     const membership_type = document.querySelector("#mem_type_select").value;
     const start_date      = document.querySelector("#mem_start_input").value;
-    const prices          = { day: "£5.00", weekly: "£20.00", monthly: "£50.00" };
-    const priceLabel      = prices[membership_type] || "";
+    const priceLabel      = prices["pass_" + membership_type] ? "£" + (prices["pass_" + membership_type] / 100).toFixed(2) : "";
 
     document.querySelector("#mem_error_msg").textContent = "";
 
@@ -551,23 +640,21 @@ async function purchaseMembership() {
     }
 
     document.querySelector("#btn_purchase_membership").textContent = "Redirecting to payment...";
-    document.querySelector("#btn_purchase_membership").disabled = true;
+    document.querySelector("#btn_purchase_membership").disabled    = true;
 
     const req = await fetch("/api/membership/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ membership_type: membership_type, start_date: start_date })
+        body: JSON.stringify({ membership_type, start_date })
     });
 
     if (req.ok) {
-        // Server returned a Stripe Checkout URL — send the user there to pay
-        const data = await req.json();
-        window.location.href = data.url;
+        window.location.href = (await req.json()).url;
     } else {
         const fail = await req.json();
-        document.querySelector("#mem_error_msg").textContent = fail.message;
-        document.querySelector("#btn_purchase_membership").textContent = "Purchase — " + priceLabel;
-        document.querySelector("#btn_purchase_membership").disabled = false;
+        document.querySelector("#mem_error_msg").textContent          = fail.message;
+        document.querySelector("#btn_purchase_membership").textContent = "Purchase" + (priceLabel ? " — " + priceLabel : "");
+        document.querySelector("#btn_purchase_membership").disabled    = false;
     }
 }
 
@@ -616,4 +703,54 @@ function getSessionEndTime(booking) {
 // Formats a Date as "8 May 2026"
 function formatDate(date) {
     return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+
+// ── Check In ──────────────────────────────────────────────────────────────────
+
+function loadCheckin() {
+    document.querySelector("#btn_start_checkin_scanner").addEventListener("click", startCheckinScanner);
+}
+
+function startCheckinScanner() {
+    document.querySelector("#btn_start_checkin_scanner").style.display = "none";
+
+    checkinScanner = new Html5QrcodeScanner("checkin_scanner_container", {
+        fps: 20,
+        qrbox: { width: 250, height: 250 }
+    });
+
+    checkinScanner.render(onCheckinScanSuccess);
+}
+
+async function onCheckinScanSuccess(decodedText) {
+    await checkinScanner.clear();
+    checkinScanner = null;
+
+    const req = await fetch("/attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decodedText })
+    });
+
+    const result  = await req.json();
+    const message = result.message;
+
+    let cardClass;
+    if (message && message.startsWith("✅"))      cardClass = "scan-ok";
+    else if (message && (message.startsWith("⏰") || message.startsWith("⚠️"))) cardClass = "scan-warn";
+    else                                           cardClass = "scan-fail";
+
+    const resultDiv = document.querySelector("#checkin_scan_result");
+    const card      = document.createElement("div");
+    card.className  = "scan-result-card " + cardClass;
+    card.innerHTML  = "<p>" + message + "</p>" +
+                      "<button id='btn_scan_again' class='btn-ghost'>Scan Again</button>";
+    resultDiv.innerHTML = "";
+    resultDiv.appendChild(card);
+
+    document.querySelector("#btn_scan_again").addEventListener("click", () => {
+        resultDiv.innerHTML = "";
+        document.querySelector("#btn_start_checkin_scanner").style.display = "block";
+    });
 }

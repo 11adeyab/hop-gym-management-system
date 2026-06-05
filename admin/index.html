@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HOP Boxing Academy — Admin</title>
+    <title>Admin Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -233,6 +233,137 @@
             font-size: 0.9rem;
             min-width: 220px;
             text-align: center;
+        }
+
+        /* ── Timetable calendar grid ── */
+        .cal-scroll-wrap {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(140px, 1fr));
+            border: 1px solid var(--border);
+            min-width: 980px;
+        }
+
+        .cal-col {
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+        }
+
+        .cal-col:last-child { border-right: none; }
+
+        .cal-header {
+            background: var(--bg);
+            text-align: center;
+            padding: 10px 8px;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+        }
+
+        .cal-day-name {
+            display: block;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+        }
+
+        .cal-day-date {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-top: 2px;
+        }
+
+        .cal-day-date.today {
+            color: var(--primary);
+        }
+
+        .cal-sessions {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 8px;
+            background: var(--bg);
+            flex: 1;
+        }
+
+        .admin-session-card {
+            background: var(--white);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--primary);
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .admin-card-name {
+            font-size: 0.78rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .admin-card-time {
+            font-size: 0.72rem;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .admin-card-instructor {
+            font-size: 0.7rem;
+            color: var(--muted);
+        }
+
+        .admin-card-meta {
+            font-size: 0.68rem;
+            color: var(--muted);
+            margin-top: 2px;
+        }
+
+        .admin-card-actions {
+            display: flex;
+            gap: 4px;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid var(--border);
+        }
+
+        .admin-card-actions button {
+            flex: 1;
+            padding: 4px 0;
+            font-size: 0.65rem;
+            font-weight: 700;
+            font-family: inherit;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            cursor: pointer;
+            letter-spacing: 0.03em;
+            transition: background 0.1s, color 0.1s;
+        }
+
+        .admin-card-actions button:hover { background: var(--border); }
+
+        .admin-card-actions .btn-card-delete {
+            border-color: rgba(212,4,4,0.3);
+            color: var(--danger);
+            background: var(--danger-bg);
+        }
+
+        .admin-card-actions .btn-card-delete:hover { background: rgba(212,4,4,0.16); }
+
+        .cal-empty {
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.8rem;
+            padding: 16px 0;
         }
 
         /* ── Tables ── */
@@ -486,6 +617,63 @@
         .type-booking    { background: rgba(15,113,240,0.08); color: var(--primary); border-color: rgba(15,113,240,0.3); }
         .type-membership { background: var(--success-bg);     color: var(--success); border-color: rgba(22,163,74,0.3); }
 
+        /* ── Pricing ── */
+        .pricing-group {
+            background: var(--white);
+            border: 1px solid var(--border);
+            padding: 20px 24px;
+            max-width: 480px;
+            margin-bottom: 16px;
+        }
+
+        .pricing-group-head {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted);
+            margin-bottom: 14px;
+        }
+
+        .pricing-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            gap: 16px;
+        }
+
+        .pricing-row:last-child { border-bottom: none; }
+        .pricing-label { font-size: 0.85rem; font-weight: 600; }
+
+        .pricing-input-wrap {
+            display: flex;
+            align-items: center;
+            border: 1px solid var(--border);
+            background: var(--bg);
+        }
+
+        .pricing-prefix {
+            padding: 7px 10px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--muted);
+            border-right: 1px solid var(--border);
+        }
+
+        .pricing-input {
+            width: 90px;
+            padding: 7px 10px;
+            border: none;
+            background: transparent;
+            font-size: 0.88rem;
+            font-family: inherit;
+            color: var(--text);
+        }
+
+        .pricing-input:focus { outline: none; }
+
         .report-toolbar {
             display: flex;
             justify-content: space-between;
@@ -561,16 +749,17 @@
     <div class="app">
         <aside id="sidebar">
             <div class="sidebar-brand">
-                <div class="brand-name">HOP Boxing</div>
+                <div class="brand-name">HOP Boxing Academy</div>
                 <div class="admin-badge">ADMIN</div>
                 <div class="brand-user" id="sidebar_user_name"></div>
             </div>
             <nav>
-                <a href="#" id="nav_qr_scanner">QR Scanner</a>
-                <a href="#" id="nav_timetable">Timetable</a>
-                <a href="#" id="nav_customers">Customers</a>
-                <a href="#" id="nav_staff">Staff</a>
-                <a href="#" id="nav_reports">Reports</a>
+                <a href="#" id="nav_qr_scanner">Verify Membership</a>
+                <a href="#" id="nav_timetable">Manage Timetable</a>
+                <a href="#" id="nav_customers">Manage Customers</a>
+                <a href="#" id="nav_staff">Manage Staff</a>
+                <a href="#" id="nav_reports">View Reports</a>
+                <a href="#" id="nav_pricing">Pricing</a>
             </nav>
             <div class="sidebar-footer">
                 <a href="/logout" class="nav-logout">Log out</a>
@@ -588,14 +777,10 @@
 
     <div id="nav_overlay"></div>
 
-
-    <!-- ============================================================
-         TEMPLATES
-    ============================================================ -->
-
     <template id="template_qr_scanner">
         <section>
-            <h2>QR Scanner</h2>
+            <h2>Verify Membership</h2>
+            <p style="color:var(--muted);font-size:0.85rem;margin-bottom:16px;">Scan a member's membership QR code to verify it is currently valid.</p>
             <button id="btn_start_scanner" class="btn-primary">Start Scanner</button>
             <div id="scanner_container" style="margin-top:20px; max-width:500px;"></div>
             <div id="scan_result"></div>
@@ -613,24 +798,21 @@
                 </div>
                 <button id="btn_add_session" class="btn-primary">+ Add Session</button>
             </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Session</th>
-                        <th>Date</th>
-                        <th>Time</th>
-                        <th>Duration</th>
-                        <th>Instructor</th>
-                        <th>Spaces</th>
-                        <th>Gender</th>
-                        <th>Age</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody id="timetable_body"></tbody>
-            </table>
+            <div class="cal-scroll-wrap">
+                <div id="calendar_grid" class="calendar-grid"></div>
+            </div>
         </section>
     </template>
+
+    <!-- Session QR Code modal -->
+    <div id="session_qr_modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box" style="max-width:340px;text-align:center;">
+            <h3 id="session_qr_title" style="margin-bottom:16px;"></h3>
+            <img id="session_qr_image" src="" alt="Session QR Code" style="width:280px;height:280px;display:block;margin:0 auto 16px;">
+            <p style="color:var(--muted);font-size:0.78rem;margin-bottom:16px;">Display or print this QR code at the session entrance. Members scan it on their phone to check themselves in.</p>
+            <button id="btn_close_session_qr" class="btn-ghost">Close</button>
+        </div>
+    </div>
 
     <template id="template_customers">
         <section>
@@ -721,11 +903,6 @@
     </template>
 
 
-    <!-- ============================================================
-         MODALS
-    ============================================================ -->
-
-    <!-- Add / Edit Session Modal -->
     <div id="modal_session_overlay" class="modal-overlay">
         <div class="modal-box">
             <h3 id="modal_session_title">Add Session</h3>
@@ -758,6 +935,14 @@
                 </div>
             </div>
 
+            <div class="form-row">
+                <div>
+                    <label class="form-label" for="form_price">Booking Price (£)</label>
+                    <input type="number" id="form_price" class="form-input" min="0" step="0.01" placeholder="3.00">
+                </div>
+                <div></div>
+            </div>
+
             <label class="form-label" for="form_instructor">Instructor</label>
             <input type="text" id="form_instructor" class="form-input" placeholder="e.g. Q Shillingford">
 
@@ -788,7 +973,6 @@
         </div>
     </div>
 
-    <!-- Delete Session Confirmation Modal -->
     <div id="modal_delete_overlay" class="modal-overlay">
         <div class="modal-box-sm">
             <h3>Delete Session</h3>
@@ -800,7 +984,6 @@
         </div>
     </div>
 
-    <!-- Create Staff Account Modal -->
     <div id="modal_staff_overlay" class="modal-overlay">
         <div class="modal-box">
             <h3>Create Staff Account</h3>
@@ -863,7 +1046,6 @@
         </div>
     </div>
 
-    <!-- Edit User Account Modal -->
     <div id="modal_edit_overlay" class="modal-overlay">
         <div class="modal-box">
             <h3 id="modal_edit_title">Edit Account</h3>
@@ -926,7 +1108,6 @@
         </div>
     </div>
 
-    <!-- Delete Account Confirmation Modal -->
     <div id="modal_delete_account_overlay" class="modal-overlay">
         <div class="modal-box-sm">
             <h3>Delete Account</h3>
@@ -938,13 +1119,66 @@
         </div>
     </div>
 
+    <template id="template_pricing">
+        <section>
+            <h2>Pricing</h2>
+            <p style="color:var(--muted);font-size:0.85rem;margin-bottom:24px;">All prices are in GBP (£). Changes take effect immediately for new purchases.</p>
+
+            <div class="pricing-group">
+                <div class="pricing-group-head">Annual Gym Membership</div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_membership_non_carded">Non-Carded Boxer</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_membership_non_carded" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_membership_carded">Carded Boxer</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_membership_carded" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+            </div>
+
+            <div class="pricing-group">
+                <div class="pricing-group-head">Session Passes</div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_pass_day">Day Pass</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_pass_day" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_pass_weekly">Weekly Pass</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_pass_weekly" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_pass_monthly">Monthly Pass</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_pass_monthly" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+            </div>
+
+            <button id="btn_save_pricing" class="btn-primary" style="margin-top:8px;">Save Prices</button>
+            <p id="pricing_msg" style="font-size:0.85rem;margin-top:10px;min-height:1rem;"></p>
+        </section>
+    </template>
+
     <script>
         // Populate day selects (1–31) for staff creation and edit modals
         for (const selId of ["staff_dob_day", "edit_dob_day"]) {
             const sel = document.querySelector("#" + selId);
             for (let d = 1; d <= 31; d++) {
                 const opt = document.createElement("option");
-                opt.value = d;
+                opt.value       = String(d);
                 opt.textContent = d;
                 sel.appendChild(opt);
             }

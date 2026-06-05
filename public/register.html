@@ -282,7 +282,7 @@
         const daySelect = document.querySelector("#dob_day");
         for (let d = 1; d <= 31; d++) {
             const opt = document.createElement("option");
-            opt.value = d;
+            opt.value       = String(d);
             opt.textContent = d;
             daySelect.appendChild(opt);
         }
