@@ -15,6 +15,8 @@
             --text:       #1A1A1A;
             --muted:      #A1A1A1;
             --danger:     #D40404;
+            --success:    #16A34A;
+            --success-bg: rgba(22,163,74,0.10);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,7 +30,6 @@
             flex-direction: column;
         }
 
-        /* ── Nav ── */
         nav {
             display: flex;
             justify-content: space-between;
@@ -66,7 +67,6 @@
         .nav-links a:hover { color: var(--text); background: var(--bg); }
         .nav-links .nav-active { color: var(--primary); }
 
-        /* ── Page body ── */
         .page-body {
             flex: 1;
             display: flex;
@@ -75,13 +75,12 @@
             padding: 48px 20px;
         }
 
-        /* ── Card ── */
         .card {
             background: var(--white);
             border: 1px solid var(--border);
             padding: 40px;
             width: 100%;
-            max-width: 480px;
+            max-width: 560px;
         }
 
         .card-eyebrow {
@@ -94,7 +93,7 @@
         }
 
         .card h2 {
-            font-size: 1.6rem;
+            font-size: 1.5rem;
             font-weight: 800;
             margin-bottom: 4px;
         }
@@ -105,6 +104,86 @@
             margin-bottom: 28px;
         }
 
+        /* Step indicator */
+        .step-bar {
+            display: flex;
+            align-items: center;
+            margin-bottom: 28px;
+        }
+
+        .step-dot {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+        }
+
+        .step-dot .dot {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: var(--border);
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+
+        .step-dot.active { color: var(--primary); }
+        .step-dot.active .dot { background: var(--primary); color: white; }
+        .step-dot.done .dot { background: var(--success); color: white; }
+        .step-dot.done { color: var(--success); }
+
+        .step-line { flex: 1; height: 1px; background: var(--border); margin: 0 10px; }
+
+        /* Membership option cards */
+        .mem-options { display: flex; gap: 10px; margin-bottom: 16px; }
+
+        .mem-option {
+            flex: 1;
+            border: 2px solid var(--border);
+            padding: 16px;
+            background: var(--bg);
+            cursor: pointer;
+            text-align: left;
+            font-family: inherit;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .mem-option:hover { border-color: var(--primary); background: var(--primary-bg); }
+        .mem-option.selected { border-color: var(--primary); background: var(--primary-bg); }
+
+        .mem-option-label { font-size: 0.82rem; font-weight: 700; margin-bottom: 4px; }
+        .mem-option-price { font-size: 1.1rem; font-weight: 800; color: var(--primary); }
+        .mem-option-desc  { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+
+        /* Awards addon */
+        .awards-addon { padding: 14px; background: var(--bg); border: 1px solid var(--border); margin-bottom: 20px; }
+
+        .awards-addon label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin: 0;
+            text-transform: none;
+            letter-spacing: 0;
+            color: var(--text);
+        }
+
+        .awards-addon input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
+        .awards-addon .addon-price { color: var(--primary); font-weight: 800; margin-left: auto; }
+        .awards-addon .addon-note { font-size: 0.72rem; color: var(--muted); margin-top: 6px; margin-left: 26px; }
+
+        /* Form fields */
         label {
             display: block;
             font-size: 0.72rem;
@@ -127,41 +206,45 @@
             transition: border-color 0.15s;
         }
 
-        input:focus, select:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
+        input:focus, select:focus { outline: none; border-color: var(--primary); }
         input::placeholder { color: var(--muted); }
-
         select option { background: var(--white); }
 
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 14px;
-        }
-
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         .form-row > div label { margin-top: 0; }
 
-        .dob-row {
-            display: grid;
-            grid-template-columns: 1fr 2fr 1.5fr;
-            gap: 8px;
-            margin-top: 18px;
-        }
-
+        .dob-row { display: grid; grid-template-columns: 1fr 2fr 1.5fr; gap: 8px; margin-top: 18px; }
         .dob-row select, .dob-row input { margin-top: 0; }
 
-        .section-divider {
-            border: none;
-            border-top: 1px solid var(--border);
-            margin: 22px 0 4px;
+        /* Notices */
+        .notice {
+            padding: 12px 14px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            margin-top: 14px;
+            border: 1px solid;
         }
 
-        .btn-submit {
+        .notice-green { background: var(--success-bg); border-color: rgba(22,163,74,0.3); color: var(--success); }
+
+        /* Order summary */
+        .order-summary { background: var(--bg); border: 1px solid var(--border); margin-bottom: 20px; }
+
+        .order-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 14px;
+            font-size: 0.87rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .order-row:last-child { border-bottom: none; }
+        .order-row.total { font-weight: 800; font-size: 0.95rem; color: var(--primary); }
+
+        /* Buttons */
+        .btn-primary {
             width: 100%;
-            margin-top: 24px;
+            margin-top: 16px;
             padding: 12px;
             background: var(--primary);
             color: var(--white);
@@ -174,22 +257,28 @@
             transition: background 0.15s;
         }
 
-        .btn-submit:hover { background: #0a5ec4; }
+        .btn-primary:hover { background: #0a5ec4; }
+        .btn-primary:disabled { background: var(--muted); cursor: not-allowed; }
 
-        #error_msg {
-            color: var(--danger);
-            font-size: 0.82rem;
-            margin-top: 10px;
-            min-height: 1.1rem;
-        }
-
-        .form-footer {
-            text-align: center;
-            margin-top: 20px;
-            font-size: 0.82rem;
+        .btn-back {
+            background: none;
+            border: 1px solid var(--border);
             color: var(--muted);
+            padding: 10px 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            margin-top: 10px;
+            width: 100%;
+            transition: background 0.15s;
         }
 
+        .btn-back:hover { background: var(--bg); }
+
+        .section-divider { border: none; border-top: 1px solid var(--border); margin: 22px 0 4px; }
+
+        .form-footer { text-align: center; margin-top: 20px; font-size: 0.82rem; color: var(--muted); }
         .form-footer a { color: var(--primary); text-decoration: none; font-weight: 600; }
         .form-footer a:hover { text-decoration: underline; }
 
@@ -200,6 +289,7 @@
             .form-row { grid-template-columns: 1fr; }
             .dob-row { grid-template-columns: 1fr 1fr; }
             .dob-row input[type="number"] { grid-column: 1 / -1; }
+            .mem-options { flex-direction: column; }
         }
     </style>
 </head>
@@ -216,65 +306,114 @@
     <div class="page-body">
         <div class="card">
             <p class="card-eyebrow">HOP Boxing Academy</p>
-            <h2>Create your account</h2>
-            <p class="subtitle">Join the academy and start booking sessions</p>
+            <h2 id="card_title">Choose Your Membership</h2>
+            <p class="subtitle" id="card_subtitle">Step 1 of 3 — Select a membership to get started</p>
 
-            <div class="form-row" style="margin-top:0;">
-                <div>
-                    <label for="first_name">First Name</label>
-                    <input type="text" id="first_name" name="first_name" placeholder="Jane" autocomplete="given-name">
-                </div>
-                <div>
-                    <label for="last_name">Last Name</label>
-                    <input type="text" id="last_name" name="last_name" placeholder="Smith" autocomplete="family-name">
-                </div>
+            <div class="step-bar">
+                <div class="step-dot active" id="sdot_1"><div class="dot">1</div>Select</div>
+                <div class="step-line"></div>
+                <div class="step-dot" id="sdot_2"><div class="dot">2</div>Details</div>
+                <div class="step-line"></div>
+                <div class="step-dot" id="sdot_3"><div class="dot">3</div>Confirm</div>
             </div>
 
-            <label>Date of Birth</label>
-            <div class="dob-row">
-                <select id="dob_day">
-                    <option value="" disabled selected>Day</option>
-                </select>
-                <select id="dob_month">
-                    <option value="" disabled selected>Month</option>
-                    <option value="01">January</option>
-                    <option value="02">February</option>
-                    <option value="03">March</option>
-                    <option value="04">April</option>
-                    <option value="05">May</option>
-                    <option value="06">June</option>
-                    <option value="07">July</option>
-                    <option value="08">August</option>
-                    <option value="09">September</option>
-                    <option value="10">October</option>
-                    <option value="11">November</option>
-                    <option value="12">December</option>
-                </select>
-                <input type="number" id="dob_year" placeholder="Year" min="1920" max="2015">
+            <!-- Step 1: SELECT -->
+            <div id="step_1">
+                <div class="mem-options">
+                    <button class="mem-option" id="opt_non_carded" onclick="selectMembership('non_carded')">
+                        <div class="mem-option-label">Non-Carded Membership</div>
+                        <div class="mem-option-price" id="price_non_carded">—</div>
+                        <div class="mem-option-desc">Annual gym membership</div>
+                    </button>
+                    <button class="mem-option" id="opt_carded" onclick="selectMembership('carded')">
+                        <div class="mem-option-label">Carded Membership</div>
+                        <div class="mem-option-price" id="price_carded">—</div>
+                        <div class="mem-option-desc">Annual gym membership</div>
+                    </button>
+                </div>
+
+                <div class="awards-addon">
+                    <label>
+                        <input type="checkbox" id="chk_awards">
+                        <span>Add Boxing Awards Programme</span>
+                        <span class="addon-price" id="price_awards">+£10.00</span>
+                    </label>
+                    <p class="addon-note">Save £10 — adding now costs less than purchasing later (£20 standalone).</p>
+                </div>
+
+                <div id="step1_error" style="color:var(--danger);font-size:0.82rem;min-height:1rem;margin-bottom:8px;"></div>
+                <button class="btn-primary" onclick="advanceToDetails()">Continue to Details →</button>
+                <p class="form-footer">Already have an account? <a href="/login">Sign in here</a></p>
             </div>
 
-            <label for="gender">Gender</label>
-            <select id="gender" name="gender">
-                <option value="" disabled selected>Select</option>
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-            </select>
+            <!-- Step 2: DETAILS -->
+            <div id="step_2" style="display:none;">
+                <div class="form-row" style="margin-top:0;">
+                    <div>
+                        <label for="first_name">First Name</label>
+                        <input type="text" id="first_name" placeholder="Jane" autocomplete="given-name">
+                    </div>
+                    <div>
+                        <label for="last_name">Last Name</label>
+                        <input type="text" id="last_name" placeholder="Smith" autocomplete="family-name">
+                    </div>
+                </div>
 
-            <hr class="section-divider">
+                <label>Date of Birth</label>
+                <div class="dob-row">
+                    <select id="dob_day"><option value="" disabled selected>Day</option></select>
+                    <select id="dob_month">
+                        <option value="" disabled selected>Month</option>
+                        <option value="01">January</option><option value="02">February</option>
+                        <option value="03">March</option><option value="04">April</option>
+                        <option value="05">May</option><option value="06">June</option>
+                        <option value="07">July</option><option value="08">August</option>
+                        <option value="09">September</option><option value="10">October</option>
+                        <option value="11">November</option><option value="12">December</option>
+                    </select>
+                    <input type="number" id="dob_year" placeholder="Year" min="1920">
+                </div>
 
-            <label for="email">Email Address</label>
-            <input type="email" id="email" name="email" placeholder="you@example.com" autocomplete="email">
+                <div id="minnow_notice" class="notice notice-green" style="display:none;">
+                    Minnows (under 10) don't need a membership — your account will be created free of charge.
+                </div>
 
-            <label for="phone">Phone Number</label>
-            <input type="tel" id="phone" name="phone" placeholder="07700 900000" autocomplete="tel">
+                <label for="gender">Gender</label>
+                <select id="gender">
+                    <option value="" disabled selected>Select</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                </select>
 
-            <label for="password">Password</label>
-            <input type="password" id="password" name="password" placeholder="Create a password" autocomplete="new-password">
+                <hr class="section-divider">
 
-            <button id="btn_submit_register" class="btn-submit">Create Account</button>
-            <p id="error_msg"></p>
+                <label for="email">Email Address</label>
+                <input type="email" id="email" placeholder="you@example.com" autocomplete="email">
 
-            <p class="form-footer">Already have an account? <a href="/login">Sign in here</a></p>
+                <label for="phone">Phone Number</label>
+                <input type="tel" id="phone" placeholder="07700 900000" autocomplete="tel">
+
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Create a password" autocomplete="new-password">
+
+                <label for="confirm_password">Confirm Password</label>
+                <input type="password" id="confirm_password" placeholder="Re-enter your password">
+
+                <div id="step2_error" style="color:var(--danger);font-size:0.82rem;margin-top:10px;min-height:1rem;"></div>
+                <button class="btn-primary" onclick="advanceToConfirm()">Review Order →</button>
+                <button class="btn-back" onclick="backToSelect()">← Back</button>
+            </div>
+
+            <!-- Step 3: CONFIRM -->
+            <div id="step_3" style="display:none;">
+                <div id="order_summary" class="order-summary"></div>
+                <div id="minnow_confirm_notice" class="notice notice-green" style="display:none;">
+                    No payment required. Your account will be created immediately.
+                </div>
+                <p id="error_msg" style="color:var(--danger);font-size:0.82rem;margin-top:10px;min-height:1rem;"></p>
+                <button class="btn-primary" id="btn_pay" onclick="submitRegistration()">Pay →</button>
+                <button class="btn-back" onclick="backToDetails()">← Back</button>
+            </div>
         </div>
     </div>
 
@@ -282,7 +421,7 @@
         const daySelect = document.querySelector("#dob_day");
         for (let d = 1; d <= 31; d++) {
             const opt = document.createElement("option");
-            opt.value       = String(d);
+            opt.value = String(d);
             opt.textContent = d;
             daySelect.appendChild(opt);
         }

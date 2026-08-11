@@ -402,11 +402,14 @@
             margin-top: 20px;
         }
 
-        .scan-result-card p { font-size: 1rem; margin-bottom: 14px; font-weight: 600; }
+        .scan-result-card p { font-size: 1rem; margin-bottom: 8px; font-weight: 600; }
 
         .scan-ok   { background: var(--success-bg); border-color: rgba(22,163,74,0.3);  color: var(--success); }
         .scan-warn { background: var(--warning-bg); border-color: rgba(217,119,6,0.3);  color: var(--warning); }
         .scan-fail { background: var(--danger-bg);  border-color: rgba(212,4,4,0.3);    color: var(--danger);  }
+
+        .scan-member-name   { font-size: 1.05rem; font-weight: 700; margin-bottom: 4px; }
+        .scan-member-detail { font-size: 0.85rem; opacity: 0.85; margin-bottom: 2px; }
 
         /* ── Modals ── */
         .modal-overlay {
@@ -616,6 +619,7 @@
 
         .type-booking    { background: rgba(15,113,240,0.08); color: var(--primary); border-color: rgba(15,113,240,0.3); }
         .type-membership { background: var(--success-bg);     color: var(--success); border-color: rgba(22,163,74,0.3); }
+        .type-ticket     { background: rgba(124,58,237,0.08); color: #7c3aed;        border-color: rgba(124,58,237,0.3); }
 
         /* ── Pricing ── */
         .pricing-group {
@@ -708,7 +712,15 @@
 
         #nav_overlay.open { display: block; }
 
-        /* ── Mobile ── */
+        /* ── Tablet (701 – 960px) ── */
+        @media (max-width: 960px) {
+            main { padding: 22px 20px; }
+            .form-row { grid-template-columns: 1fr; }
+            .profile-card { max-width: 100%; }
+            .toolbar { flex-wrap: wrap; gap: 10px; }
+        }
+
+        /* ── Mobile (≤ 700px) ── */
         @media (max-width: 700px) {
             body { height: auto; overflow: auto; }
             .app  { height: auto; min-height: 100vh; overflow: visible; }
@@ -723,24 +735,63 @@
             }
 
             #sidebar.open { transform: translateX(0); }
-
             .mobile-topbar { display: flex; }
-
             .main-wrap { overflow: visible; }
-            main { overflow: visible; height: auto; padding: 20px 16px; }
+            main { overflow: visible; height: auto; padding: 16px 14px; }
 
-            table { display: block; overflow-x: auto; white-space: nowrap; }
+            h2 { font-size: 1rem; margin-bottom: 14px; }
 
-            .modal-overlay { align-items: flex-start; padding-top: 20px; }
+            /* Tables */
+            table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
 
-            .modal-box, .modal-box-sm { width: 95vw; max-width: 95vw; }
+            /* Modals */
+            .modal-overlay { align-items: flex-start; padding: 12px; }
+            .modal-box, .modal-box-sm { width: 100%; max-width: 100%; padding: 18px 14px; max-height: 88vh; }
+            .modal-actions { flex-wrap: wrap; }
+            .modal-actions button { flex: 1; min-width: 120px; min-height: 42px; }
 
+            /* Forms */
+            .form-row { grid-template-columns: 1fr; }
+            .dob-row  { grid-template-columns: 1fr 1fr; gap: 8px; }
+
+            /* Profile / booking cards */
             .profile-card, .booking-card { max-width: 100%; }
+            .profile-card { padding: 14px; }
+            .profile-row  { flex-direction: column; align-items: flex-start; gap: 4px; }
+            .profile-actions { flex-direction: column; gap: 8px; }
+            .profile-actions button { width: 100%; min-height: 42px; }
             .booking-card { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+            /* Toolbars */
             .toolbar { flex-direction: column; align-items: flex-start; }
             .report-toolbar { flex-direction: column; align-items: flex-start; }
+            .week-nav { flex-wrap: wrap; gap: 8px; }
+            #week_label { min-width: unset; width: 100%; text-align: left; font-size: 0.82rem; order: -1; }
+
+            /* Reports */
             .report-summary { grid-template-columns: 1fr 1fr; }
-            .form-row { grid-template-columns: 1fr; }
+
+            /* Pricing */
+            .pricing-group { max-width: 100%; }
+            .pricing-row   { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .pricing-input-wrap { width: 100%; }
+            .pricing-input { width: 100%; }
+
+            /* Filter tabs */
+            .filter-tabs button { font-size: 0.75rem; padding: 10px 6px; min-height: 40px; }
+
+            /* Touch-friendly nav */
+            nav a, .nav-logout { padding: 13px 16px; min-height: 44px; display: flex; align-items: center; }
+
+            /* General button touch targets */
+            .btn-primary, .btn-ghost, .btn-danger { min-height: 42px; }
+
+            /* Session card actions — stack vertically */
+            .admin-card-actions { flex-direction: row; flex-wrap: wrap; }
+            .admin-card-actions button { min-height: 36px; }
+
+            /* Scan result card */
+            .scan-result-card { max-width: 100%; }
         }
     </style>
 </head>
@@ -810,7 +861,10 @@
             <h3 id="session_qr_title" style="margin-bottom:16px;"></h3>
             <img id="session_qr_image" src="" alt="Session QR Code" style="width:280px;height:280px;display:block;margin:0 auto 16px;">
             <p style="color:var(--muted);font-size:0.78rem;margin-bottom:16px;">Display or print this QR code at the session entrance. Members scan it on their phone to check themselves in.</p>
-            <button id="btn_close_session_qr" class="btn-ghost">Close</button>
+            <div style="display:flex;gap:10px;justify-content:center;">
+                <button id="btn_print_session_qr" class="btn-primary">Print QR</button>
+                <button id="btn_close_session_qr" class="btn-ghost">Close</button>
+            </div>
         </div>
     </div>
 
@@ -883,6 +937,7 @@
                     <button id="report_tab_all" class="active">All</button>
                     <button id="report_tab_bookings">Bookings</button>
                     <button id="report_tab_memberships">Memberships</button>
+                    <button id="report_tab_tickets">Tickets</button>
                 </div>
                 <button id="btn_export_csv" class="btn-export">Export CSV</button>
             </div>
@@ -935,23 +990,31 @@
                 </div>
             </div>
 
-            <div class="form-row">
-                <div>
-                    <label class="form-label" for="form_price">Booking Price (£)</label>
-                    <input type="number" id="form_price" class="form-input" min="0" step="0.01" placeholder="3.00">
-                </div>
-                <div></div>
-            </div>
+            <p style="font-size:0.75rem;color:var(--muted);margin-top:14px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);">
+                Price is set automatically: <strong>£3.00</strong> for Minnows sessions (max age &lt; 10) or <strong>£4.00</strong> for all other sessions. Update these in the Pricing section.
+            </p>
 
             <label class="form-label" for="form_instructor">Instructor</label>
             <input type="text" id="form_instructor" class="form-input" placeholder="e.g. Q Shillingford">
 
-            <label class="form-label" for="form_gender">Gender Eligibility</label>
-            <select id="form_gender" class="form-input">
-                <option value="Any">Any</option>
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-            </select>
+            <div class="form-row">
+                <div>
+                    <label class="form-label" for="form_gender">Gender Eligibility</label>
+                    <select id="form_gender" class="form-input">
+                        <option value="Any">Any</option>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label" for="form_membership">Membership Type</label>
+                    <select id="form_membership" class="form-input">
+                        <option value="Any">Any</option>
+                        <option value="Carded">Carded only</option>
+                        <option value="Non-Carded">Non-Carded only</option>
+                    </select>
+                </div>
+            </div>
 
             <div class="form-row">
                 <div>
@@ -1122,19 +1185,19 @@
     <template id="template_pricing">
         <section>
             <h2>Pricing</h2>
-            <p style="color:var(--muted);font-size:0.85rem;margin-bottom:24px;">All prices are in GBP (£). Changes take effect immediately for new purchases.</p>
+            <p style="color:var(--muted);font-size:0.85rem;margin-bottom:24px;">All prices are in GBP (£). Changes take effect immediately for new purchases and sessions.</p>
 
             <div class="pricing-group">
                 <div class="pricing-group-head">Annual Gym Membership</div>
                 <div class="pricing-row">
-                    <label class="pricing-label" for="price_membership_non_carded">Non-Carded Boxer</label>
+                    <label class="pricing-label" for="price_membership_non_carded">Non-Carded Membership</label>
                     <div class="pricing-input-wrap">
                         <span class="pricing-prefix">£</span>
                         <input type="number" id="price_membership_non_carded" class="pricing-input" min="0" step="0.01" placeholder="0.00">
                     </div>
                 </div>
                 <div class="pricing-row">
-                    <label class="pricing-label" for="price_membership_carded">Carded Boxer</label>
+                    <label class="pricing-label" for="price_membership_carded">Carded Membership</label>
                     <div class="pricing-input-wrap">
                         <span class="pricing-prefix">£</span>
                         <input type="number" id="price_membership_carded" class="pricing-input" min="0" step="0.01" placeholder="0.00">
@@ -1143,23 +1206,59 @@
             </div>
 
             <div class="pricing-group">
-                <div class="pricing-group-head">Session Passes</div>
+                <div class="pricing-group-head">Boxing Awards Programme</div>
                 <div class="pricing-row">
-                    <label class="pricing-label" for="price_pass_day">Day Pass</label>
+                    <label class="pricing-label" for="price_awards_with_membership">With Membership (discounted)</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_awards_with_membership" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_awards_standalone">Standalone (purchased later)</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_awards_standalone" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+            </div>
+
+            <div class="pricing-group">
+                <div class="pricing-group-head">Individual Session Booking</div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_session_minnows">Minnows (max age &lt; 10)</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_session_minnows" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_session_standard">Standard (all other sessions)</label>
+                    <div class="pricing-input-wrap">
+                        <span class="pricing-prefix">£</span>
+                        <input type="number" id="price_session_standard" class="pricing-input" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                </div>
+            </div>
+
+            <div class="pricing-group">
+                <div class="pricing-group-head">Tickets</div>
+                <div class="pricing-row">
+                    <label class="pricing-label" for="price_pass_day">Day Ticket</label>
                     <div class="pricing-input-wrap">
                         <span class="pricing-prefix">£</span>
                         <input type="number" id="price_pass_day" class="pricing-input" min="0" step="0.01" placeholder="0.00">
                     </div>
                 </div>
                 <div class="pricing-row">
-                    <label class="pricing-label" for="price_pass_weekly">Weekly Pass</label>
+                    <label class="pricing-label" for="price_pass_weekly">Weekly Ticket</label>
                     <div class="pricing-input-wrap">
                         <span class="pricing-prefix">£</span>
                         <input type="number" id="price_pass_weekly" class="pricing-input" min="0" step="0.01" placeholder="0.00">
                     </div>
                 </div>
                 <div class="pricing-row">
-                    <label class="pricing-label" for="price_pass_monthly">Monthly Pass</label>
+                    <label class="pricing-label" for="price_pass_monthly">Monthly Ticket</label>
                     <div class="pricing-input-wrap">
                         <span class="pricing-prefix">£</span>
                         <input type="number" id="price_pass_monthly" class="pricing-input" min="0" step="0.01" placeholder="0.00">

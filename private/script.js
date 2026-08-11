@@ -40,6 +40,7 @@ document.querySelector("#nav_book_sessions").addEventListener("click",    () => 
 document.querySelector("#nav_my_bookings").addEventListener("click",      () => showView("my_bookings"));
 document.querySelector("#nav_gym_membership").addEventListener("click",   () => showView("gym_membership"));
 document.querySelector("#nav_session_passes").addEventListener("click",   () => showView("session_passes"));
+document.querySelector("#nav_shop").addEventListener("click",             () => showView("shop"));
 document.querySelector("#nav_checkin").addEventListener("click",          () => showView("checkin"));
 
 showView("overview");
@@ -79,6 +80,9 @@ async function showView(viewName) {
     }
     else if (viewName === "session_passes") {
         loadSessionPasses();
+    }
+    else if (viewName === "shop") {
+        loadShop();
     }
     else if (viewName === "checkin") {
         loadCheckin();
@@ -146,7 +150,7 @@ async function loadOverview() {
     if (membershipReq.ok) {
         const d = await membershipReq.json();
         if (d.data) {
-            const passLabels = { day: "Day Pass", weekly: "Weekly", monthly: "Monthly" };
+            const passLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
             const passLabel  = passLabels[d.data.membership_type] || "Pass";
             membershipLabel  = membershipLabel === "None" ? passLabel : membershipLabel + " + " + passLabel;
         }
@@ -207,20 +211,23 @@ async function loadBookSessions() {
 function renderTimetable() {
     const week = getWeekRange(weekOffset);
 
-    // Update the week label in the middle of the nav
     document.querySelector("#week_label").textContent = formatDate(week.start) + " - " + formatDate(week.end);
 
     const grid = document.querySelector("#calendar_grid");
     grid.innerHTML = "";
 
+    const now = new Date();
+    const todayStr =
+        now.getFullYear() + "-" +
+        String(now.getMonth() + 1).padStart(2, "0") + "-" +
+        String(now.getDate()).padStart(2, "0");
+
     const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-    // Build one column per day of the week (index 0 = Monday, 6 = Sunday)
     for (let d = 0; d < 7; d++) {
         const dayDate = new Date(week.start);
         dayDate.setDate(week.start.getDate() + d);
 
-        // Format as YYYY-MM-DD using local time to match DATE_FORMAT output from server
         const dayStr =
             dayDate.getFullYear() + "-" +
             String(dayDate.getMonth() + 1).padStart(2, "0") + "-" +
@@ -229,7 +236,7 @@ function renderTimetable() {
         const daySessions = allSessions.filter(s => s.start_date === dayStr);
 
         const col = document.createElement("div");
-        col.className = "cal-col";
+        col.className = "cal-col" + (dayStr === todayStr ? " cal-col-today" : "");
 
         col.innerHTML =
             "<div class='cal-header'>" +
@@ -251,10 +258,15 @@ function renderTimetable() {
                 const card = document.createElement("div");
                 card.className = "session-card";
                 const cardPrice = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "";
+                const memElig = session.membership_eligibility || "Any";
+                const memBadge = memElig !== "Any"
+                    ? "<div class='session-card-badge'>" + memElig + "</div>"
+                    : "";
                 card.innerHTML =
                     "<div class='session-card-name'>" + session.session_name + "</div>" +
                     "<div class='session-card-time'>" + session.start_time.split(":").slice(0, 2).join(":") + "</div>" +
-                    "<div class='session-card-spaces'>" + session.capacity + " spaces" + (cardPrice ? " &middot; " + cardPrice : "") + "</div>";
+                    "<div class='session-card-spaces'>" + session.capacity + " spaces" + (cardPrice ? " &middot; " + cardPrice : "") + "</div>" +
+                    memBadge;
                 card.addEventListener("click", () => openModal(session));
                 sessionsContainer.appendChild(card);
             }
@@ -273,6 +285,10 @@ function openModal(session) {
     document.querySelector("#modal_instructor").textContent = session.instructor;
     document.querySelector("#modal_spaces").textContent = session.capacity;
     document.querySelector("#modal_gender").textContent = session.gender_eligibility;
+    const memEligLabel = session.membership_eligibility || "Any";
+    document.querySelector("#modal_membership").textContent =
+        memEligLabel === "Any" ? "Any" :
+        memEligLabel === "Carded" ? "Carded Boxers only" : "Non-Carded only";
     document.querySelector("#modal_age").textContent = session.min_age + " to " + session.max_age + " years";
 
     const priceLabel = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—";
@@ -290,24 +306,28 @@ function openModal(session) {
 // The booking is only created in the database after payment is confirmed.
 async function bookSession(session) {
     document.querySelector("#error_msg").textContent = "";
+    const priceLabel = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—";
     document.querySelector("#modal_btn_book").textContent = "Redirecting to payment...";
     document.querySelector("#modal_btn_book").disabled = true;
 
-    const req = await fetch("/api/bookings/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(session)
-    });
+    try {
+        const req = await fetch("/api/bookings/checkout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(session)
+        });
 
-    if (req.ok) {
-        // Server returned a Stripe Checkout URL — send the user there to pay
-        const data = await req.json();
-        window.location.href = data.url;
-    } else {
-        // Show the validation error inside the modal and re-enable the button
-        const fail = await req.json();
-        const priceLabel = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—";
-        document.querySelector("#error_msg").textContent = fail.message;
+        if (req.ok) {
+            const data = await req.json();
+            window.location.href = data.url;
+        } else {
+            const fail = await req.json();
+            document.querySelector("#error_msg").textContent = fail.message;
+            document.querySelector("#modal_btn_book").textContent = "Book — " + priceLabel;
+            document.querySelector("#modal_btn_book").disabled = false;
+        }
+    } catch (_) {
+        document.querySelector("#error_msg").textContent = "Network error — please try again.";
         document.querySelector("#modal_btn_book").textContent = "Book — " + priceLabel;
         document.querySelector("#modal_btn_book").disabled = false;
     }
@@ -473,9 +493,10 @@ async function cancelBooking(bookingId) {
 }
 
 async function loadGymMembership() {
-    const [gymReq, pricingReq] = await Promise.all([
+    const [gymReq, pricingReq, userReq] = await Promise.all([
         fetch("/api/gym-membership"),
-        fetch("/api/pricing")
+        fetch("/api/pricing"),
+        fetch("/api/user")
     ]);
 
     const prices = {};
@@ -484,8 +505,22 @@ async function loadGymMembership() {
         for (const row of pd.data) prices[row.price_key] = row.value_pence;
     }
 
-    const gymData = gymReq.ok ? (await gymReq.json()).data : null;
-    renderGymMembership(gymData, prices);
+    const gymData  = gymReq.ok  ? (await gymReq.json()).data  : null;
+    const userData = userReq.ok ? (await userReq.json()).data : null;
+
+    // Auto-activate free minnow membership on first visit — no action required from the member
+    if (!gymData && userData && calcAge(userData.dob) !== null && calcAge(userData.dob) < 10) {
+        const resp = await fetch("/api/gym-membership/free", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ membership_type: "minnow_non_carded" })
+        });
+        if (resp.ok) loadGymMembership();
+        else renderGymMembership(null, prices, userData);
+        return;
+    }
+
+    renderGymMembership(gymData, prices, userData);
 }
 
 async function loadSessionPasses() {
@@ -504,45 +539,99 @@ async function loadSessionPasses() {
     renderSessionPass(passData, prices);
 }
 
-function renderGymMembership(membership, prices) {
-    const badge      = document.querySelector("#gym_mem_badge");
-    const details    = document.querySelector("#gym_mem_details");
-    const purchaseSec = document.querySelector("#gym_mem_purchase_section");
+function renderGymMembership(membership, prices, user) {
+    const badge           = document.querySelector("#gym_mem_badge");
+    const details         = document.querySelector("#gym_mem_details");
+    const purchaseSec     = document.querySelector("#gym_mem_purchase_section");
+    const awardsPurchSec  = document.querySelector("#gym_awards_purchase_section");
 
-    const typeLabels = { non_carded: "Non-Carded Boxer", carded: "Carded Boxer" };
+    const typeLabels = { non_carded: "Non-Carded Membership", carded: "Carded Membership", minnow_non_carded: "Minnows (Non-Carded)", minnow_carded: "Minnows (Carded)" };
+    const fmt = p => p ? "£" + (p / 100).toFixed(2) : "—";
 
     if (membership) {
-        badge.textContent = "Active";
-        badge.className   = "mem-status-badge mem-status-active";
-        details.style.display   = "block";
-        purchaseSec.style.display = "none";
+        badge.textContent   = "Active";
+        badge.className     = "mem-status-badge mem-status-active";
+        details.style.display    = "block";
+        purchaseSec.style.display  = "none";
+
         document.querySelector("#gym_mem_type").textContent     = typeLabels[membership.membership_type] || membership.membership_type;
         document.querySelector("#gym_mem_end_date").textContent = membership.end_date;
+        document.querySelector("#gym_mem_awards_status").textContent = membership.has_boxing_awards ? "Active" : "Not purchased";
+
+        document.querySelector("#btn_gym_mem_qr").onclick = () => openGymMemQRModal(membership);
+
+        const isMinnow = ["minnow_carded", "minnow_non_carded"].includes(membership.membership_type);
+        if (membership.has_boxing_awards || isMinnow) {
+            awardsPurchSec.style.display = "none";
+        } else {
+            awardsPurchSec.style.display = "block";
+            const standalonePrice = prices.awards_standalone;
+            document.querySelector("#price_awards_standalone_display").textContent = fmt(standalonePrice);
+            document.querySelector("#btn_buy_awards_standalone").onclick = () => purchaseBoxingAwards();
+        }
     } else {
         badge.textContent = "No Active Membership";
         badge.className   = "mem-status-badge mem-status-inactive";
-        details.style.display   = "none";
-        purchaseSec.style.display = "block";
+        details.style.display    = "none";
+        awardsPurchSec.style.display = "none";
+        purchaseSec.style.display  = "block";
 
-        const fmt = p => p ? "£" + (p / 100).toFixed(2) : "—";
         document.querySelector("#price_non_carded").textContent = fmt(prices.membership_non_carded);
         document.querySelector("#price_carded").textContent     = fmt(prices.membership_carded);
 
-        document.querySelector("#btn_join_non_carded").onclick = () => purchaseGymMembership("non_carded");
-        document.querySelector("#btn_join_carded").onclick     = () => purchaseGymMembership("carded");
+        const awardsAddonPrice = prices.awards_with_membership;
+        document.querySelector("#awards_addon_price").textContent = "+" + fmt(awardsAddonPrice);
+
+        document.querySelector("#btn_join_non_carded").onclick = () => purchaseGymMembership("non_carded", prices);
+        document.querySelector("#btn_join_carded").onclick     = () => purchaseGymMembership("carded", prices);
     }
 }
 
-async function purchaseGymMembership(type) {
+async function openGymMemQRModal(membership) {
+    const typeLabels = { non_carded: "Non-Carded", carded: "Carded", minnow_non_carded: "Minnows (Non-Carded)", minnow_carded: "Minnows (Carded)" };
+    document.querySelector("#modal_gym_mem_qr_details").textContent = (typeLabels[membership.membership_type] || membership.membership_type) + "  ·  Valid until " + membership.end_date;
+    const img = document.querySelector("#modal_gym_mem_qr_image");
+    img.src = "";
+    img.alt = "Loading QR code…";
+    document.querySelector("#modal_gym_mem_qr_overlay").classList.add("open");
+    document.querySelector("#modal_gym_mem_qr_btn_close").onclick = () => {
+        document.querySelector("#modal_gym_mem_qr_overlay").classList.remove("open");
+    };
+    try {
+        const resp = await fetch("/api/member/membership-qr");
+        if (resp.ok) {
+            const data = await resp.json();
+            img.src = data.data;
+            img.alt = "Gym Membership QR Code";
+        } else {
+            img.alt = "QR code unavailable";
+        }
+    } catch (_) {
+        img.alt = "QR code unavailable";
+    }
+}
+
+function calcAge(dob) {
+    if (!dob) return null;
+    const today = new Date();
+    const birth = new Date(dob);
+    if (isNaN(birth.getTime())) return null;
+    let age = today.getFullYear() - birth.getFullYear();
+    if (today.getMonth() < birth.getMonth() || (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) age--;
+    return age;
+}
+
+async function purchaseGymMembership(type, prices) {
     document.querySelector("#gym_mem_error_msg").textContent = "";
-    const btn = document.querySelector("#btn_join_" + (type === "non_carded" ? "non_carded" : "carded"));
+    const include_awards = document.querySelector("#chk_include_awards").checked;
+    const btn = document.querySelector("#btn_join_" + type);
     btn.disabled = true;
     btn.querySelector(".gym-mem-option-label").textContent = "Redirecting...";
 
     const req = await fetch("/api/gym-membership/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ membership_type: type })
+        body: JSON.stringify({ membership_type: type, include_awards })
     });
 
     if (req.ok) {
@@ -551,12 +640,36 @@ async function purchaseGymMembership(type) {
         const fail = await req.json();
         document.querySelector("#gym_mem_error_msg").textContent = fail.message;
         btn.disabled = false;
-        btn.querySelector(".gym-mem-option-label").textContent = type === "non_carded" ? "Non-Carded Boxer" : "Carded Boxer";
+        const typeLabels = { non_carded: "Non-Carded Membership", carded: "Carded Membership" };
+        btn.querySelector(".gym-mem-option-label").textContent = typeLabels[type] || type;
+    }
+}
+
+
+async function purchaseBoxingAwards() {
+    document.querySelector("#gym_awards_error_msg").textContent = "";
+    const btn = document.querySelector("#btn_buy_awards_standalone");
+    const priceText = btn.querySelector("span").textContent;
+    btn.disabled = true;
+    btn.textContent = "Redirecting to payment...";
+
+    const req = await fetch("/api/boxing-awards/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+    });
+
+    if (req.ok) {
+        window.location.href = (await req.json()).url;
+    } else {
+        const fail = await req.json();
+        document.querySelector("#gym_awards_error_msg").textContent = fail.message;
+        btn.disabled = false;
+        btn.innerHTML = "Purchase Boxing Awards Programme — <span id='price_awards_standalone_display'>" + priceText + "</span>";
     }
 }
 
 function renderSessionPass(membership, prices) {
-    const typeLabels = { day: "Day Pass", weekly: "Weekly Pass", monthly: "Monthly Pass" };
+    const typeLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
 
     if (membership) {
         const badge = document.querySelector("#mem_status_badge");
@@ -617,14 +730,29 @@ function renderSessionPass(membership, prices) {
     }
 }
 
-function openPassQRModal(membership) {
-    const typeLabels = { day: "Day Pass", weekly: "Weekly Pass", monthly: "Monthly Pass" };
+
+async function openPassQRModal(membership) {
+    const typeLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
     document.querySelector("#modal_mem_qr_details").textContent = (typeLabels[membership.membership_type] || membership.membership_type) + "  ·  " + membership.start_date + " to " + membership.end_date;
-    document.querySelector("#modal_mem_qr_image").src = membership.qr_code;
+    const img = document.querySelector("#modal_mem_qr_image");
+    img.src = "";
+    img.alt = "Loading QR code…";
     document.querySelector("#modal_mem_qr_overlay").classList.add("open");
     document.querySelector("#modal_mem_qr_btn_close").onclick = () => {
         document.querySelector("#modal_mem_qr_overlay").classList.remove("open");
     };
+    try {
+        const resp = await fetch("/api/member/pass-qr");
+        if (resp.ok) {
+            const data = await resp.json();
+            img.src = data.data;
+            img.alt = "Ticket QR Code";
+        } else {
+            img.alt = "QR code unavailable";
+        }
+    } catch (_) {
+        img.alt = "QR code unavailable";
+    }
 }
 
 async function purchaseSessionPass(prices) {
@@ -693,18 +821,82 @@ function getSessionStartTime(booking) {
     return new Date(booking.start_date + "T" + booking.start_time);
 }
 
-// Returns a Date object for when a session ends
-function getSessionEndTime(booking) {
-    const end = new Date(booking.start_date + "T" + booking.start_time);
-    end.setHours(end.getHours() + booking.duration);
-    return end;
-}
-
 // Formats a Date as "8 May 2026"
 function formatDate(date) {
     return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
+
+// ── Shop ─────────────────────────────────────────────────────────────────────
+
+async function loadShop() {
+    const [gymReq, pricingReq] = await Promise.all([
+        fetch("/api/gym-membership"),
+        fetch("/api/pricing")
+    ]);
+
+    const prices = {};
+    if (pricingReq.ok) {
+        const pd = await pricingReq.json();
+        for (const row of pd.data) prices[row.price_key] = row.value_pence;
+    }
+
+    let hasAwards = false;
+    if (gymReq.ok) {
+        const gd = await gymReq.json();
+        if (gd.data && gd.data.has_boxing_awards) hasAwards = true;
+    }
+
+    const fmt = p => p ? "£" + (p / 100).toFixed(2) : "£20.00";
+    const awardsPrice = fmt(prices.awards_standalone);
+
+    const grid = document.querySelector("#shop_products");
+    grid.className = "product-grid";
+
+    const card = document.createElement("div");
+    card.className = "product-card";
+
+    if (hasAwards) {
+        card.innerHTML =
+            "<div class='product-name'>Boxing Awards Programme</div>" +
+            "<div class='product-desc'>Join the competitive Boxing Awards Programme and track your progress through official gradings.</div>" +
+            "<div class='product-price'>" + awardsPrice + "</div>" +
+            "<button class='btn-primary btn-sm' disabled style='margin-top:0;width:auto;'>Already Included</button>";
+    } else {
+        card.innerHTML =
+            "<div class='product-name'>Boxing Awards Programme</div>" +
+            "<div class='product-desc'>Join the competitive Boxing Awards Programme and track your progress through official gradings.</div>" +
+            "<div class='product-price'>" + awardsPrice + "</div>" +
+            "<button class='btn-primary btn-sm' id='btn_shop_buy_awards' style='margin-top:0;width:auto;'>Buy Now</button>" +
+            "<p class='product-msg' id='shop_awards_msg'></p>";
+        grid.appendChild(card);
+
+        document.querySelector("#btn_shop_buy_awards").addEventListener("click", async () => {
+            const btn = document.querySelector("#btn_shop_buy_awards");
+            const msg = document.querySelector("#shop_awards_msg");
+            btn.disabled = true;
+            btn.textContent = "Redirecting...";
+            msg.textContent = "";
+
+            const req = await fetch("/api/boxing-awards/checkout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" }
+            });
+
+            if (req.ok) {
+                window.location.href = (await req.json()).url;
+            } else {
+                const fail = await req.json();
+                msg.textContent = fail.message || "Purchase failed. Please try again.";
+                btn.disabled = false;
+                btn.textContent = "Buy Now";
+            }
+        });
+        return;
+    }
+
+    grid.appendChild(card);
+}
 
 // ── Check In ──────────────────────────────────────────────────────────────────
 
@@ -727,19 +919,20 @@ async function onCheckinScanSuccess(decodedText) {
     await checkinScanner.clear();
     checkinScanner = null;
 
-    const req = await fetch("/attendance", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decodedText })
-    });
+    let message  = "❌ Check-in failed — network error. Please try again.";
+    let cardClass = "scan-fail";
 
-    const result  = await req.json();
-    const message = result.message;
-
-    let cardClass;
-    if (message && message.startsWith("✅"))      cardClass = "scan-ok";
-    else if (message && (message.startsWith("⏰") || message.startsWith("⚠️"))) cardClass = "scan-warn";
-    else                                           cardClass = "scan-fail";
+    try {
+        const req = await fetch("/attendance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ decodedText })
+        });
+        const result = await req.json();
+        message = result.message;
+        if (message && message.startsWith("✅"))                                       cardClass = "scan-ok";
+        else if (message && (message.startsWith("⏰") || message.startsWith("⚠️"))) cardClass = "scan-warn";
+    } catch (_) { /* keep defaults */ }
 
     const resultDiv = document.querySelector("#checkin_scan_result");
     const card      = document.createElement("div");

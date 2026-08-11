@@ -365,6 +365,14 @@
 
         .cal-col:last-child { border-right: none; }
 
+        .cal-col-today .cal-header {
+            background: var(--primary);
+            color: white;
+        }
+
+        .cal-col-today .cal-day-name,
+        .cal-col-today .cal-day-date { color: white; }
+
         .cal-header {
             background: var(--white);
             text-align: center;
@@ -410,6 +418,18 @@
         .session-card-name { font-size: 0.75rem; font-weight: 700; margin-bottom: 2px; }
         .session-card-time { font-size: 0.7rem; color: var(--primary); font-weight: 600; }
         .session-card-spaces { font-size: 0.68rem; color: var(--muted); margin-top: 2px; }
+        .session-card-badge {
+            display: inline-block;
+            margin-top: 4px;
+            padding: 1px 6px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            background: var(--primary-bg);
+            color: var(--primary);
+            border: 1px solid var(--primary);
+        }
 
         .cal-empty {
             text-align: center;
@@ -635,7 +655,14 @@
 
         #nav_overlay.open { display: block; }
 
-        /* ── Mobile ── */
+        /* ── Tablet (701 – 960px) ── */
+        @media (max-width: 960px) {
+            main { padding: 22px 20px; }
+            .stats-row { grid-template-columns: 1fr 1fr; }
+            .membership-card { max-width: 100%; }
+        }
+
+        /* ── Mobile (≤ 700px) ── */
         @media (max-width: 700px) {
             body { height: auto; overflow: auto; }
             .app  { height: auto; min-height: 100vh; overflow: visible; }
@@ -650,25 +677,72 @@
             }
 
             #sidebar.open { transform: translateX(0); }
-
             .mobile-topbar { display: flex; }
-
             .main-wrap { overflow: visible; }
-            main { overflow: visible; height: auto; padding: 20px 16px; }
+            main { overflow: visible; height: auto; padding: 16px 14px; }
 
-            .stats-row { grid-template-columns: 1fr; }
+            h2 { font-size: 1rem; margin-bottom: 14px; }
 
+            /* Stats */
+            .stats-row { grid-template-columns: 1fr 1fr; }
+            .stat-num  { font-size: 1.5rem; }
 
-            .modal-box { width: 100%; max-width: 100%; padding: 20px 16px; }
+            /* Tables */
+            table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
 
+            /* Week navigation */
+            .week-nav { flex-wrap: wrap; gap: 8px; }
+            #week_label { min-width: unset; width: 100%; text-align: left; font-size: 0.82rem; order: -1; }
+
+            /* Upcoming rows */
+            .upcoming-row { flex-wrap: wrap; gap: 2px 10px; padding: 10px 12px; }
+            .upcoming-name { width: 100%; }
+            .upcoming-date, .upcoming-time { min-width: unset; font-size: 0.78rem; }
+            .upcoming-time { text-align: left; }
+
+            /* Modals */
+            .modal-overlay { align-items: flex-start; padding: 12px; }
+            .modal-box { width: 100%; max-width: 100%; padding: 18px 14px; max-height: 88vh; }
             .modal-info-grid { grid-template-columns: 1fr; }
+            .modal-actions { flex-direction: column; }
+            .modal-actions button { width: 100%; min-height: 42px; }
 
-            .booking-card { flex-direction: column; align-items: flex-start; }
+            /* Booking cards */
+            .booking-card { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .booking-actions { display: flex; gap: 8px; width: 100%; }
+            .booking-actions button { flex: 1; min-height: 40px; }
 
+            /* Membership */
             .membership-card, #mem_purchase_section { max-width: 100%; }
+            .gym-mem-options { flex-direction: column; }
+            .gym-mem-option  { min-width: unset; width: 100%; }
 
-            .filter-tabs button { font-size: 0.78rem; padding: 9px 8px; }
+            /* Filter tabs */
+            .filter-tabs button { font-size: 0.75rem; padding: 10px 6px; min-height: 40px; }
+
+            /* Touch-friendly nav */
+            nav a, .nav-logout { padding: 13px 16px; min-height: 44px; display: flex; align-items: center; }
+
+            /* General button touch targets */
+            .btn-primary, .btn-ghost, .btn-danger { min-height: 42px; }
         }
+
+        /* ── Shop ── */
+        .product-grid { display: flex; flex-wrap: wrap; gap: 16px; }
+
+        .product-card {
+            background: var(--white);
+            border: 1px solid var(--border);
+            padding: 20px 24px;
+            min-width: 220px;
+            max-width: 300px;
+            flex: 1;
+        }
+
+        .product-name { font-size: 0.95rem; font-weight: 800; margin-bottom: 6px; }
+        .product-desc { font-size: 0.82rem; color: var(--muted); margin-bottom: 14px; line-height: 1.5; }
+        .product-price { font-size: 1.4rem; font-weight: 800; color: var(--primary); margin-bottom: 14px; }
+        .product-msg { font-size: 0.8rem; color: var(--muted); margin-top: 8px; min-height: 1rem; }
 
         /* ── Scan result cards (check-in) ── */
         .scan-result-card {
@@ -696,7 +770,8 @@
                 <a href="#" id="nav_book_sessions">Book Sessions</a>
                 <a href="#" id="nav_my_bookings">My Bookings</a>
                 <a href="#" id="nav_gym_membership">Gym Membership</a>
-                <a href="#" id="nav_session_passes">Session Passes</a>
+                <a href="#" id="nav_session_passes">Tickets</a>
+                <a href="#" id="nav_shop">Shop</a>
                 <a href="#" id="nav_checkin">Check In</a>
             </nav>
             <div class="sidebar-footer">
@@ -776,32 +851,54 @@
                     <span class="mem-label">Valid Until</span>
                     <span id="gym_mem_end_date">—</span>
                 </div>
+                <div class="mem-detail-row">
+                    <span class="mem-label">Boxing Awards</span>
+                    <span id="gym_mem_awards_status">—</span>
+                </div>
+                <button id="btn_gym_mem_qr" class="btn-ghost" style="margin-top:12px;">View Membership QR</button>
             </div>
+        </div>
+
+        <!-- Shown when user has an active membership but has not yet purchased the awards programme -->
+        <div id="gym_awards_purchase_section" style="display:none;">
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:12px;">You can add the Boxing Awards Programme to your existing membership.</p>
+            <button id="btn_buy_awards_standalone" class="btn-primary">Purchase Boxing Awards Programme — <span id="price_awards_standalone_display">£20.00</span></button>
+            <p id="gym_awards_error_msg" class="error-msg"></p>
         </div>
 
         <div id="gym_mem_purchase_section">
             <p style="font-size:0.85rem;color:var(--muted);margin-bottom:16px;">One-time annual joining fee. Valid for one year from the date of purchase.</p>
+
             <div class="gym-mem-options">
                 <button id="btn_join_non_carded" class="gym-mem-option">
-                    <div class="gym-mem-option-label">Non-Carded Boxer</div>
+                    <div class="gym-mem-option-label">Non-Carded Membership</div>
                     <div class="gym-mem-option-price" id="price_non_carded">—</div>
                     <div class="gym-mem-option-desc">Annual gym membership</div>
                 </button>
                 <button id="btn_join_carded" class="gym-mem-option">
-                    <div class="gym-mem-option-label">Carded Boxer</div>
+                    <div class="gym-mem-option-label">Carded Membership</div>
                     <div class="gym-mem-option-price" id="price_carded">—</div>
                     <div class="gym-mem-option-desc">Annual gym membership</div>
                 </button>
             </div>
+            <div style="margin-top:14px;padding:14px;background:var(--bg);border:1px solid var(--border);">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:0.85rem;font-weight:600;">
+                    <input type="checkbox" id="chk_include_awards" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;">
+                    <span>Add Boxing Awards Programme</span>
+                    <span id="awards_addon_price" style="color:var(--primary);font-weight:800;">+£10.00</span>
+                </label>
+                <p style="font-size:0.72rem;color:var(--muted);margin-top:6px;margin-left:26px;">Save £10 — adding now costs £10 vs £20 if purchased later.</p>
+            </div>
+
             <p id="gym_mem_error_msg" class="error-msg"></p>
         </div>
     </template>
 
     <template id="template_session_passes">
-        <h2>Session Passes</h2>
+        <h2>Tickets</h2>
 
         <div class="membership-card">
-            <span id="mem_status_badge" class="mem-status-badge mem-status-inactive">No Active Pass</span>
+            <span id="mem_status_badge" class="mem-status-badge mem-status-inactive">No Active Ticket</span>
             <div id="pass_details" style="display:none;">
                 <div class="mem-detail-row">
                     <span class="mem-label">Type</span>
@@ -816,18 +913,18 @@
                     <span id="mem_end_date">—</span>
                 </div>
                 <div style="margin-top:14px;">
-                    <button id="btn_mem_qr" class="btn-ghost btn-sm">View Pass QR</button>
+                    <button id="btn_mem_qr" class="btn-ghost btn-sm">View Ticket QR</button>
                 </div>
             </div>
         </div>
 
         <div id="mem_purchase_section">
-            <h3 style="margin-bottom:16px;">Purchase a Session Pass</h3>
-            <label for="mem_type_select">Pass Type</label>
+            <h3 style="margin-bottom:16px;">Purchase a Ticket</h3>
+            <label for="mem_type_select">Ticket Type</label>
             <select id="mem_type_select">
-                <option value="day">Day Pass</option>
-                <option value="weekly">Weekly Pass</option>
-                <option value="monthly">Monthly Pass</option>
+                <option value="day">Day Ticket</option>
+                <option value="weekly">Weekly Ticket</option>
+                <option value="monthly">Monthly Ticket</option>
             </select>
             <label for="mem_start_input">Start Date</label>
             <input type="date" id="mem_start_input">
@@ -852,6 +949,11 @@
         </div>
     </template>
 
+
+    <template id="template_shop">
+        <h2>Shop</h2>
+        <div id="shop_products"></div>
+    </template>
 
     <template id="template_checkin">
         <h2>Check In</h2>
@@ -889,6 +991,10 @@
                 <div class="modal-info-row">
                     <span class="info-label">Gender</span>
                     <span class="info-value" id="modal_gender"></span>
+                </div>
+                <div class="modal-info-row">
+                    <span class="info-label">Membership</span>
+                    <span class="info-value" id="modal_membership"></span>
                 </div>
                 <div class="modal-info-row">
                     <span class="info-label">Age Range</span>
@@ -930,12 +1036,21 @@
         </div>
     </div>
 
-    <div id="modal_mem_qr_overlay" class="modal-overlay">
+<div id="modal_mem_qr_overlay" class="modal-overlay">
         <div class="modal-box modal-qr-box">
-            <h3>Membership QR Code</h3>
+            <h3>Ticket QR Code</h3>
             <p id="modal_mem_qr_details"></p>
-            <img id="modal_mem_qr_image" src="" alt="Membership QR Code">
+            <img id="modal_mem_qr_image" src="" alt="Ticket QR Code">
             <button id="modal_mem_qr_btn_close" class="btn-ghost">Close</button>
+        </div>
+    </div>
+
+    <div id="modal_gym_mem_qr_overlay" class="modal-overlay">
+        <div class="modal-box modal-qr-box">
+            <h3>Gym Membership QR Code</h3>
+            <p id="modal_gym_mem_qr_details"></p>
+            <img id="modal_gym_mem_qr_image" src="" alt="Gym Membership QR Code">
+            <button id="modal_gym_mem_qr_btn_close" class="btn-ghost">Close</button>
         </div>
     </div>
 

@@ -2,7 +2,6 @@ let allAdminSessions = []; // all sessions are fetched from the server and displ
 let editingSessionId = null; // tracks whether the session modal is in "add" or "edit" mode
 let scanner = null; // holds the Html5QrcodeScanner instance so we can stop it when switching views
 let adminWeekOffset = 0; // how many weeks forward or back from the current week we're viewing
-let profileActiveFilter = "upcoming"; // which booking tab is active on the customer profile page
 
 
 // Hamburger menu toggle (mobile)
@@ -109,46 +108,56 @@ function startScanner() {
     scanner.render(onScanSuccess);
 }
 
-// Called by the scanner library each time it successfully reads a QR code.
-// Sends the decoded text to the server attendance endpoint and displays the result.
 async function onScanSuccess(decodedText) {
-    // Stop the scanner as soon as a code is read so the camera closes
-    await scanner.clear();
+    try {
+        await scanner.clear();
+    } catch (_) {}
     scanner = null;
 
-    // Send the scanned QR code to the membership verification endpoint
-    const req = await fetch("/api/admin/verify-membership", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decodedText: decodedText })
-    });
+    const resultDiv = document.querySelector("#scan_result");
 
-    const result  = await req.json();
-    const message = result.message || result.data;
+    let result;
+    try {
+        const resp = await fetch("/api/admin/verify-membership", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ decodedText })
+        });
+        result = await resp.json();
+    } catch (err) {
+        result = { status: "invalid", message: "❌ Network error: " + err.message };
+    }
 
-    // Choose a card colour based on the emoji prefix the server puts on the message:
-    //   ✅ = success (green), ⏰/⚠️ = warning (yellow), anything else = failure (red)
     let cardClass;
-    if (message && message.startsWith("✅")) {
+    if (result.status === "valid") {
         cardClass = "scan-ok";
-    } else if (message && (message.startsWith("⏰") || message.startsWith("⚠️"))) {
+    } else if (result.status === "expired") {
         cardClass = "scan-warn";
     } else {
         cardClass = "scan-fail";
     }
 
-    // Build and display the result card with a "Scan Another" button
-    const resultDiv = document.querySelector("#scan_result");
+    let html = "<p>" + (result.message || "Unknown result") + "</p>";
+    if (result.name) {
+        html += "<div class='scan-member-name'>" + result.name + "</div>";
+        html += "<div class='scan-member-detail'>" + result.type + (result.awards ? " &middot; Boxing Awards ✓" : "") + "</div>";
+        if (result.start_date) {
+            html += "<div class='scan-member-detail'>" + result.start_date + " &mdash; " + result.end_date + "</div>";
+        } else {
+            html += "<div class='scan-member-detail'>" + (result.status === "valid" ? "Valid until " : "Expired ") + result.end_date + "</div>";
+        }
+    }
+    if (result.status !== "valid") {
+        html += "<div class='scan-member-detail' style='margin-top:8px;font-size:0.75rem;opacity:0.6;'>Scanned: " + decodedText + "</div>";
+    }
+    html += "<button id='btn_scan_again' class='btn-secondary' style='margin-top:16px;'>Scan Another</button>";
+
     const card = document.createElement("div");
     card.className = "scan-result-card " + cardClass;
-    card.innerHTML =
-        "<p>" + message + "</p>" +
-        "<button id='btn_scan_again' class='btn-secondary'>Scan Another</button>";
-
+    card.innerHTML = html;
     resultDiv.innerHTML = "";
     resultDiv.appendChild(card);
 
-    // "Scan Another" clears the result and re-shows the start button so staff can scan again
     document.querySelector("#btn_scan_again").addEventListener("click", () => {
         resultDiv.innerHTML = "";
         document.querySelector("#btn_start_scanner").style.display = "block";
@@ -260,6 +269,7 @@ function renderTimetable() {
                     "<div class='admin-card-meta'>" +
                         session.capacity + " spaces &middot; " +
                         session.gender_eligibility + " &middot; " +
+                        (session.membership_eligibility && session.membership_eligibility !== "Any" ? session.membership_eligibility + " &middot; " : "") +
                         session.min_age + "–" + session.max_age + " yrs &middot; " +
                         (session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—") +
                     "</div>" +
@@ -284,23 +294,42 @@ function renderTimetable() {
 
 // Fetches the session's QR code image from the server and shows it in a modal.
 async function openSessionQRModal(session) {
-    const modal     = document.querySelector("#session_qr_modal");
-    const titleEl   = document.querySelector("#session_qr_title");
-    const imgEl     = document.querySelector("#session_qr_image");
-    const closeBtn  = document.querySelector("#btn_close_session_qr");
+    const modal    = document.querySelector("#session_qr_modal");
+    const titleEl  = document.querySelector("#session_qr_title");
+    const imgEl    = document.querySelector("#session_qr_image");
+    const closeBtn = document.querySelector("#btn_close_session_qr");
+    const printBtn = document.querySelector("#btn_print_session_qr");
 
     titleEl.textContent = session.session_name + " — " + session.start_date;
     imgEl.src = "";
+    printBtn.disabled = true;
     modal.style.display = "flex";
 
     const req = await fetch("/api/admin/sessions/" + session.session_id + "/qr");
     if (req.ok) {
         const res = await req.json();
         imgEl.src = res.qr;
+        printBtn.disabled = false;
+        printBtn.onclick = () => printSessionQR(session, res.qr);
     }
 
     closeBtn.onclick = () => { modal.style.display = "none"; };
     modal.onclick    = (e) => { if (e.target === modal) modal.style.display = "none"; };
+}
+
+function printSessionQR(session, qrSrc) {
+    const win = window.open("", "_blank");
+    win.document.write(
+        "<!DOCTYPE html><html><head><title>Session QR — " + session.session_name + "</title>" +
+        "<style>body{font-family:sans-serif;text-align:center;padding:40px;} h2{margin-bottom:4px;} p{color:#555;margin:4px 0 20px;} img{display:block;margin:0 auto;width:260px;height:260px;} @media print{button{display:none;}}</style></head><body>" +
+        "<h2>" + session.session_name + "</h2>" +
+        "<p>" + session.start_date + " &nbsp;·&nbsp; " + session.start_time.split(":").slice(0,2).join(":") + " &nbsp;·&nbsp; " + session.duration + " hr</p>" +
+        "<img src='" + qrSrc + "' alt='QR Code'>" +
+        "<p style='font-size:0.8rem;color:#999;margin-top:16px;'>Members scan to check in</p>" +
+        "<button onclick='window.print()' style='margin-top:20px;padding:10px 24px;font-size:1rem;cursor:pointer;'>Print</button>" +
+        "</body></html>"
+    );
+    win.document.close();
 }
 
 // Opens the session form modal. If session is null the form is blank (add mode).
@@ -320,9 +349,9 @@ function openSessionModal(session) {
         document.querySelector("#form_instructor").value = session.instructor;
         document.querySelector("#form_capacity").value = session.capacity;
         document.querySelector("#form_gender").value = session.gender_eligibility;
+        document.querySelector("#form_membership").value = session.membership_eligibility || "Any";
         document.querySelector("#form_min_age").value = session.min_age;
         document.querySelector("#form_max_age").value = session.max_age;
-        document.querySelector("#form_price").value   = session.price_pence != null ? (session.price_pence / 100).toFixed(2) : "";
     } else {
         // Add mode — clear the form and reset the editing ID
         editingSessionId = null;
@@ -334,14 +363,13 @@ function openSessionModal(session) {
         document.querySelector("#form_instructor").value = "";
         document.querySelector("#form_capacity").value = "";
         document.querySelector("#form_gender").value = "Any";
+        document.querySelector("#form_membership").value = "Any";
         document.querySelector("#form_min_age").value = "";
         document.querySelector("#form_max_age").value = "";
-        document.querySelector("#form_price").value   = "";
     }
 
     document.querySelector("#modal_session_overlay").classList.add("open");
 
-    // Wire the Save and Close buttons each time the modal opens so they always point at the right session
     document.querySelector("#modal_session_btn_save").onclick  = () => saveSession();
     document.querySelector("#modal_session_btn_close").onclick = () => {
         document.querySelector("#modal_session_overlay").classList.remove("open");
@@ -359,9 +387,9 @@ async function saveSession() {
         instructor: document.querySelector("#form_instructor").value,
         capacity: Number(document.querySelector("#form_capacity").value),
         gender_eligibility: document.querySelector("#form_gender").value,
-        min_age:     Number(document.querySelector("#form_min_age").value),
-        max_age:     Number(document.querySelector("#form_max_age").value),
-        price_pence: Math.round(parseFloat(document.querySelector("#form_price").value) * 100) || 0
+        membership_eligibility: document.querySelector("#form_membership").value,
+        min_age: Number(document.querySelector("#form_min_age").value),
+        max_age: Number(document.querySelector("#form_max_age").value)
     };
 
     let req;
@@ -473,9 +501,6 @@ async function openCustomerProfile(customerId) {
     const res = await req.json();
     const { user, membership, bookings } = res.data;
 
-    // Reset the booking filter tab to "upcoming" every time a profile is opened
-    profileActiveFilter = "upcoming";
-
     const main = document.querySelector("#main_content");
     main.innerHTML = "";
 
@@ -514,13 +539,19 @@ async function openCustomerProfile(customerId) {
         const isActive = membership.status === "active";
         const badgeClass = isActive ? "mem-status-active" : "mem-status-inactive";
         const badgeText  = isActive ? "Active" : "Expired";
+        const gymTypeLabels = { carded: "Carded", non_carded: "Non-Carded", minnow_carded: "Minnows (Carded)", minnow_non_carded: "Minnows (Non-Carded)" };
+        const typeLabel  = gymTypeLabels[membership.membership_type] || membership.membership_type;
+        const awardsRow = ["carded", "non_carded"].includes(membership.membership_type)
+            ? "<div class='profile-row'><span class='profile-label'>Boxing Awards</span><span>" + (membership.has_boxing_awards ? "Yes" : "No") + "</span></div>"
+            : "";
         memCard.innerHTML =
             "<h3>Membership</h3>" +
             "<span class='mem-status-badge " + badgeClass + "'>" + badgeText + "</span>" +
-            "<div class='profile-row'><span class='profile-label'>Membership ID</span><span>" + membership.membership_id   + "</span></div>" +
-            "<div class='profile-row'><span class='profile-label'>Type</span><span>" + membership.membership_type + "</span></div>" +
-            "<div class='profile-row'><span class='profile-label'>Start Date</span><span>" + membership.start_date      + "</span></div>" +
-            "<div class='profile-row'><span class='profile-label'>End Date</span><span>" + membership.end_date        + "</span></div>";
+            "<div class='profile-row'><span class='profile-label'>Membership ID</span><span>" + membership.membership_id + "</span></div>" +
+            "<div class='profile-row'><span class='profile-label'>Type</span><span>" + typeLabel + "</span></div>" +
+            awardsRow +
+            "<div class='profile-row'><span class='profile-label'>Start Date</span><span>" + membership.start_date + "</span></div>" +
+            "<div class='profile-row'><span class='profile-label'>End Date</span><span>" + membership.end_date + "</span></div>";
     } else {
         memCard.innerHTML = "<h3>Membership</h3><p style='color:#888;margin-top:8px;'>No membership on record.</p>";
     }
@@ -532,15 +563,6 @@ async function openCustomerProfile(customerId) {
     bookingHeading.style.marginBottom = "12px";
     section.appendChild(bookingHeading);
 
-    // Filter tabs let admin staff toggle between upcoming, missed, and attended bookings
-    const tabs = document.createElement("div");
-    tabs.className = "filter-tabs";
-    tabs.innerHTML =
-        "<button id='prof_tab_upcoming' class='active'>Upcoming</button>" +
-        "<button id='prof_tab_missed'>Missed</button>" +
-        "<button id='prof_tab_attended'>Attended</button>";
-    section.appendChild(tabs);
-
     // Container div where booking cards will be rendered
     const bookingList = document.createElement("div");
     bookingList.id = "profile_bookings_list";
@@ -548,101 +570,30 @@ async function openCustomerProfile(customerId) {
 
     main.appendChild(section);
 
-    // Wire each filter tab — update the active state and re-render bookings with the new filter
-    document.querySelector("#prof_tab_upcoming").addEventListener("click", () => {
-        profileActiveFilter = "upcoming";
-        updateTabActive();
-        renderProfileBookings(bookings);
-    });
-
-    document.querySelector("#prof_tab_missed").addEventListener("click", () => {
-        profileActiveFilter = "missed";
-        updateTabActive();
-        renderProfileBookings(bookings);
-    });
-
-    document.querySelector("#prof_tab_attended").addEventListener("click", () => {
-        profileActiveFilter = "attended";
-        updateTabActive();
-        renderProfileBookings(bookings);
-    });
-
-    // Show upcoming bookings immediately when the profile first opens
     renderProfileBookings(bookings);
 }
 
-// Adds or removes the "active" CSS class on each booking filter tab
-// to match whichever filter is currently selected (profileActiveFilter).
-function updateTabActive() {
-    document.querySelector("#prof_tab_upcoming").classList.toggle("active", profileActiveFilter === "upcoming");
-    document.querySelector("#prof_tab_missed").classList.toggle(  "active", profileActiveFilter === "missed");
-    document.querySelector("#prof_tab_attended").classList.toggle( "active", profileActiveFilter === "attended");
-}
-
-// Filters the customer's full booking list down to whichever category is active,
-// then builds and displays one card per booking.
 function renderProfileBookings(bookings) {
     const list = document.querySelector("#profile_bookings_list");
     list.innerHTML = "";
 
-    // Use midnight today as the cutoff for "upcoming" vs "missed"
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-
-    const filtered = bookings.filter(b => {
-        const attended = b.checkin_datetime !== null;
-
-        if (profileActiveFilter === "attended") {
-             return attended;
-        }
-
-        // Treat bookings for deleted sessions (no start_date) as missed
-        if (!b.start_date) {
-            return profileActiveFilter === "missed";
-        }
-        const sessionDate = new Date(b.start_date + "T00:00:00");
-        if (profileActiveFilter === "missed")  {
-            return !attended && sessionDate < now;
-        }
-        
-        return !attended && sessionDate >= now; // "upcoming"
-    });
-
-    if (filtered.length === 0) {
-        list.innerHTML = "<p style='color:#888;'>No bookings in this category.</p>";
+    if (bookings.length === 0) {
+        list.innerHTML = "<p style='color:#888;'>No bookings on record.</p>";
         return;
     }
 
-    for (let booking of filtered) {
-        const attended = booking.checkin_datetime !== null;
-        const sessionDate = booking.start_date ? new Date(booking.start_date + "T00:00:00") : null;
-        const isPast = sessionDate && sessionDate < now;
-
-        // Determine the status badge text and colour class for this booking
-        let statusClass, statusLabel;
-        if (attended) {
-            statusClass = "status-attended";
-            statusLabel = "Attended";
-        } else if (isPast || !booking.start_date) {
-            statusClass = "status-missed";
-            statusLabel = "Missed";
-        } else {
-            statusClass = "status-upcoming";
-            statusLabel = "Upcoming";
-        }
-
-        // Strip seconds from start time; show fallback text if the session has been deleted
+    for (let booking of bookings) {
         const time = booking.start_time ? booking.start_time.split(":").slice(0, 2).join(":") : "--";
         const dateStr = booking.start_date ? booking.start_date + " at " + time : "Session deleted";
+        const checkedIn = booking.checkin_datetime ? " · Checked in " + booking.checkin_datetime.split(" ")[0] : "";
 
         const card = document.createElement("div");
         card.className = "booking-card";
         card.innerHTML =
             "<div>" +
                 "<strong>" + (booking.session_name || "Deleted Session") + "</strong><br>" +
-                "<small style='color:#666;'>" + dateStr + "</small>" +
-            "</div>" +
-            "<span class='status-tag " + statusClass + "'>" + statusLabel + "</span>";
+                "<small style='color:#666;'>" + dateStr + checkedIn + "</small>" +
+            "</div>";
 
         list.appendChild(card);
     }
@@ -722,7 +673,7 @@ async function saveStaff() {
     const day = document.querySelector("#staff_dob_day").value;
     const month = document.querySelector("#staff_dob_month").value;
     const year = document.querySelector("#staff_dob_year").value;
-    const dob = year && month && day ? year + "-" + month + "-" + String(day).padStart(2, "0") : "";
+    const dob = year && month && day ? year + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0") : "";
 
     const payload = {
         first_name: document.querySelector("#staff_first_name").value,
@@ -797,7 +748,7 @@ async function saveEdit() {
     const day = document.querySelector("#edit_dob_day").value;
     const month = document.querySelector("#edit_dob_month").value;
     const year = document.querySelector("#edit_dob_year").value;
-    const dob = year && month && day ? year + "-" + month + "-" + String(day).padStart(2, "0") : "";
+    const dob = year && month && day ? year + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0") : "";
 
     const payload = {
         first_name: document.querySelector("#edit_first_name").value,
@@ -911,6 +862,10 @@ async function loadReports(filter) {
         setReportTabActive("memberships");
         loadReports("memberships");
     };
+    document.querySelector("#report_tab_tickets").onclick = () => {
+        setReportTabActive("tickets");
+        loadReports("tickets");
+    };
 
     document.querySelector("#btn_export_csv").onclick = () => {
         exportCSV(currentReportPayments, currentReportFilter);
@@ -924,6 +879,7 @@ function setReportTabActive(filter) {
     document.querySelector("#report_tab_all").classList.toggle("active", filter === "all");
     document.querySelector("#report_tab_bookings").classList.toggle("active", filter === "bookings");
     document.querySelector("#report_tab_memberships").classList.toggle("active", filter === "memberships");
+    document.querySelector("#report_tab_tickets").classList.toggle("active", filter === "tickets");
 }
 
 // Builds one table row per payment in the reports table.
@@ -937,8 +893,8 @@ function renderReports(payments) {
     }
 
     for (let p of payments) {
-        const badgeClass = p.type === "booking" ? "type-booking" : "type-membership";
-        const typeLabel = p.type === "booking"  ? "Booking" : "Membership";
+        const badgeClass = p.type === "booking" ? "type-booking" : p.type === "ticket" ? "type-ticket" : "type-membership";
+        const typeLabel  = p.type === "booking" ? "Booking"      : p.type === "ticket" ? "Ticket"      : "Membership";
         const amount = "£" + (p.amount_pence / 100).toFixed(2);
 
         const row = document.createElement("tr");
@@ -958,7 +914,7 @@ function exportCSV(payments, filter) {
     const rows = payments.map(p => [
         p.paid_at,
         p.first_name + " " + p.last_name,
-        p.type === "booking" ? "Booking" : "Membership",
+        p.type === "booking" ? "Booking" : p.type === "ticket" ? "Ticket" : "Membership",
         p.description,
         (p.amount_pence / 100).toFixed(2)
     ]);

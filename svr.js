@@ -1,44 +1,198 @@
-if (process.env.NODE_ENV !== "production") {
+﻿if (process.env.NODE_ENV !== "production") {
     require("dotenv").config();
 }
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const express = require("express");
 const path    = require("path");
 const crypto  = require("crypto");
-const mysql   = require("mysql");
+const Database = require("better-sqlite3");
 const bcrypt  = require("bcrypt");
 const qrcode = require("qrcode");
 const nodemailer = require("nodemailer");
 const session = require("express-session");
 const app = express();
 
-//creates a connection to the local database server
-const connection = mysql.createConnection({
-    host:  "localhost",
-    user: "root",
-    password: "localhost1",
-    database: "test_db",
-    timezone: "local"
-});
+const db = new Database(path.resolve(__dirname, "database.db"));
+db.pragma("journal_mode = WAL");
 
-//connection is established
-connection.connect((error) => {
-    if (error){ 
-        console.error("Error connecting to database"); 
-        return; 
-    }
-    console.log("Connected to database!");
-});
-
-//connection.query gets wrapped in a promise so that every route can use async/await
+// Wraps better-sqlite3 (synchronous) in a Promise so all routes can use async/await unchanged
 function query(sql) {
     return new Promise((resolve, reject) => {
-        connection.query(sql, (error, results) => {
-            if (error) reject(error);
-            else resolve(results);
-        });
+        try {
+            const stmt  = db.prepare(sql);
+            const upper = sql.trimStart().toUpperCase();
+            if (upper.startsWith("SELECT") || upper.startsWith("WITH")) {
+                resolve(stmt.all());
+            } else {
+                resolve(stmt.run());
+            }
+        } catch (e) {
+            reject(e);
+        }
     });
 }
+
+function initDb() {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+            user_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            first_name    TEXT NOT NULL,
+            last_name     TEXT NOT NULL,
+            date_of_birth TEXT,
+            gender        TEXT,
+            email         TEXT UNIQUE NOT NULL,
+            phone         TEXT,
+            password      TEXT NOT NULL,
+            is_admin      INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_name       TEXT NOT NULL,
+            start_date         TEXT NOT NULL,
+            start_time         TEXT NOT NULL,
+            duration           INTEGER NOT NULL,
+            instructor         TEXT NOT NULL,
+            capacity           INTEGER NOT NULL,
+            gender_eligibility TEXT NOT NULL DEFAULT 'Any',
+            min_age            INTEGER NOT NULL DEFAULT 0,
+            max_age            INTEGER NOT NULL DEFAULT 100,
+            qr_code            TEXT UNIQUE,
+            price_pence        INTEGER NOT NULL DEFAULT 300
+        );
+        CREATE TABLE IF NOT EXISTS bookings (
+            booking_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            qr_code    TEXT
+        );
+        CREATE TABLE IF NOT EXISTS attendance (
+            attendance_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            booking_id       INTEGER,
+            user_id          INTEGER,
+            session_id       INTEGER,
+            checkin_datetime TEXT
+        );
+        CREATE TABLE IF NOT EXISTS memberships (
+            membership_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL,
+            membership_type TEXT NOT NULL,
+            start_date      TEXT NOT NULL,
+            end_date        TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'active',
+            qr_code         TEXT UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS payment_memberships (
+            payment_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL,
+            membership_type   TEXT NOT NULL,
+            start_date        TEXT NOT NULL,
+            end_date          TEXT NOT NULL,
+            stripe_session_id TEXT UNIQUE,
+            amount_pence      INTEGER NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            membership_id     INTEGER,
+            created_at        TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS payment_bookings (
+            payment_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL,
+            session_id        INTEGER NOT NULL,
+            stripe_session_id TEXT UNIQUE,
+            amount_pence      INTEGER NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            booking_id        INTEGER,
+            created_at        TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS gym_memberships (
+            gym_membership_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL,
+            membership_type   TEXT NOT NULL,
+            start_date        TEXT NOT NULL,
+            end_date          TEXT NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'active',
+            qr_code           TEXT UNIQUE NOT NULL,
+            has_boxing_awards INTEGER NOT NULL DEFAULT 0,
+            created_at        TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS payment_gym_memberships (
+            payment_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL,
+            membership_type   TEXT NOT NULL,
+            start_date        TEXT NOT NULL,
+            end_date          TEXT NOT NULL,
+            stripe_session_id TEXT UNIQUE,
+            amount_pence      INTEGER NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            gym_membership_id INTEGER,
+            include_awards    INTEGER NOT NULL DEFAULT 0,
+            created_at        TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS payment_boxing_awards (
+            payment_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL,
+            gym_membership_id INTEGER NOT NULL,
+            stripe_session_id TEXT UNIQUE,
+            amount_pence      INTEGER NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            created_at        TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS pricing (
+            price_key   TEXT PRIMARY KEY,
+            value_pence INTEGER NOT NULL,
+            label       TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS pending_registrations (
+            pending_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            first_name        TEXT NOT NULL,
+            last_name         TEXT NOT NULL,
+            date_of_birth     TEXT NOT NULL,
+            gender            TEXT NOT NULL,
+            email             TEXT NOT NULL,
+            phone             TEXT,
+            password_hash     TEXT NOT NULL,
+            membership_type   TEXT,
+            include_awards    INTEGER NOT NULL DEFAULT 0,
+            stripe_session_id TEXT UNIQUE,
+            amount_pence      INTEGER NOT NULL DEFAULT 0,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            created_at        TEXT DEFAULT (datetime('now'))
+        );
+    `);
+
+    // Seed pricing rows if the table is empty
+    const priceCount = db.prepare("SELECT COUNT(*) AS c FROM pricing").get();
+    if (priceCount.c === 0) {
+        db.exec(`
+            INSERT INTO pricing (price_key, value_pence, label) VALUES
+                ('pass_day',               500,  'Day Ticket'),
+                ('pass_weekly',           1000,  'Weekly Ticket'),
+                ('pass_monthly',          4000,  'Monthly Ticket'),
+                ('membership_non_carded', 1000,  'Non-Carded Membership'),
+                ('membership_carded',     2500,  'Carded Membership'),
+                ('session_minnows',        300,  'Minnows Session (under 10)'),
+                ('session_standard',       400,  'Standard Session'),
+                ('awards_with_membership',1000,  'Boxing Awards Programme (with membership)'),
+                ('awards_standalone',     2000,  'Boxing Awards Programme (standalone)');
+        `);
+    }
+
+    // Migrate: add membership_eligibility column to sessions if it doesn't exist yet
+    const sessionCols = db.prepare("PRAGMA table_info(sessions)").all();
+    if (!sessionCols.some(c => c.name === "membership_eligibility")) {
+        db.exec("ALTER TABLE sessions ADD COLUMN membership_eligibility TEXT NOT NULL DEFAULT 'Any'");
+    }
+
+    // Seed a default admin account if none exists yet
+    const adminCount = db.prepare("SELECT COUNT(*) AS c FROM users WHERE is_admin = 1").get();
+    if (adminCount.c === 0) {
+        const hash = bcrypt.hashSync("Admin@123", 10);
+        db.prepare("INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password, is_admin) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").run("Admin", "User", "1990-01-01", "Male", "admin@hop.local", "07700000000", hash);
+        console.log("Default admin created — email: admin@hop.local  password: Admin@123  (change this after first login)");
+    }
+}
+
+initDb();
+console.log("SQLite database ready: database.db");
 
 //this function formats the date to YYYY-MM-DD using local tiemzones
 function toLocalDateStr(date) {
@@ -54,6 +208,16 @@ async function getPrices() {
     const map = {};
     for (const r of rows) map[r.price_key] = r.value_pence;
     return map;
+}
+
+function computeAge(dobStr) {
+    const today = new Date();
+    const birth = new Date(dobStr);
+    if (isNaN(birth.getTime())) return null;
+    let age = today.getFullYear() - birth.getFullYear();
+    if (today.getMonth() < birth.getMonth() ||
+        (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) age--;
+    return age;
 }
 
 //connects to the SMPT gmail server to automatically send emails
@@ -136,6 +300,85 @@ app.get("/register", (req, res) => {
     return res.redirect("/dashboard");
 });
 
+app.get("/api/register/prices", async (req, res) => {
+    try {
+        const prices = await getPrices();
+        return res.json({
+            membership_non_carded:  prices.membership_non_carded  || 1000,
+            membership_carded:      prices.membership_carded      || 2500,
+            awards_with_membership: prices.awards_with_membership || 1000
+        });
+    } catch (_) {
+        return res.status(500).json({ message: "Pricing unavailable." });
+    }
+});
+
+app.get("/register/success", async (req, res) => {
+    const stripeSessionId = req.query.session_id;
+    if (!stripeSessionId) return res.redirect("/register");
+    try {
+        const rows = await query(`SELECT * FROM pending_registrations WHERE stripe_session_id = '${stripeSessionId}' LIMIT 1`);
+        if (rows.length === 0) return res.redirect("/register");
+        const pending = rows[0];
+
+        if (pending.status === 'paid') {
+            const users = await query(`SELECT * FROM users WHERE email = '${pending.email}' LIMIT 1`);
+            if (users.length > 0) {
+                req.session.user = {
+                    user_id: users[0].user_id, first_name: users[0].first_name, last_name: users[0].last_name,
+                    email: users[0].email, phone: users[0].phone, dob: users[0].date_of_birth,
+                    gender: users[0].gender, is_admin: users[0].is_admin
+                };
+            }
+            return res.redirect("/dashboard");
+        }
+
+        const stripeSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
+        if (stripeSession.payment_status !== 'paid') return res.redirect("/register");
+
+        const existingUser = await query(`SELECT user_id FROM users WHERE email = '${pending.email}' LIMIT 1`);
+        if (existingUser.length > 0) {
+            await query(`UPDATE pending_registrations SET status = 'paid' WHERE pending_id = ${pending.pending_id}`);
+            const users = await query(`SELECT * FROM users WHERE email = '${pending.email}' LIMIT 1`);
+            req.session.user = {
+                user_id: users[0].user_id, first_name: users[0].first_name, last_name: users[0].last_name,
+                email: users[0].email, phone: users[0].phone, dob: users[0].date_of_birth,
+                gender: users[0].gender, is_admin: users[0].is_admin
+            };
+            return res.redirect("/dashboard");
+        }
+
+        const dobStr = toLocalDateStr(pending.date_of_birth);
+        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password) VALUES ('${pending.first_name}','${pending.last_name}','${dobStr}','${pending.gender}','${pending.email}','${pending.phone}','${pending.password_hash}'\)`);
+        const created = await query(`SELECT * FROM users WHERE email = '${pending.email}' LIMIT 1`);
+        const newUser = created[0];
+
+        const start_date = toLocalDateStr(new Date());
+        const endDate = new Date();
+        endDate.setFullYear(endDate.getFullYear() + 1);
+        endDate.setDate(endDate.getDate() - 1);
+        const end_date = toLocalDateStr(endDate);
+        const qr_code = crypto.randomUUID();
+
+        await query(`INSERT INTO gym_memberships (user_id, membership_type, start_date, end_date, status, qr_code, has_boxing_awards) VALUES (${newUser.user_id}, '${pending.membership_type}','${start_date}','${end_date}','active', '${qr_code}',${pending.include_awards ? 1 : 0})`);
+        const gymCreated = await query(`SELECT gym_membership_id FROM gym_memberships WHERE user_id = ${newUser.user_id} AND qr_code = '${qr_code}' LIMIT 1`);
+
+        await query(`INSERT INTO payment_gym_memberships (user_id, membership_type, start_date, end_date, stripe_session_id, amount_pence, status, gym_membership_id, include_awards) VALUES (${newUser.user_id}, '${pending.membership_type}','${start_date}','${end_date}','${stripeSessionId}',${pending.amount_pence}, 'paid', ${gymCreated[0].gym_membership_id}, ${pending.include_awards ? 1 : 0})`);
+
+        await query(`UPDATE pending_registrations SET status = 'paid' WHERE pending_id = ${pending.pending_id}`);
+
+        req.session.user = {
+            user_id: newUser.user_id, first_name: newUser.first_name, last_name: newUser.last_name,
+            email: newUser.email, phone: newUser.phone, dob: newUser.date_of_birth,
+            gender: newUser.gender, is_admin: newUser.is_admin
+        };
+        return res.redirect("/dashboard");
+    } catch (error) {
+        console.error(error);
+        return res.redirect("/register");
+    }
+});
+
 app.get("/dashboard", (req, res) => {
     if (!req.session.user) {
         return res.redirect("/login");
@@ -163,24 +406,86 @@ app.get("/logout", (req, res) => {
 //generic public static files come  after explicit page routes) 
 app.use("/", express.static(path.resolve(__dirname, "public")));
 
-//Registration System:
-app.post("/register", async (req, res) => {
-    const { first_name, last_name, dob, gender, email, phone, password } = req.body;
-    if (!first_name || !last_name || !email || !password) {
+// Registration System — Step 1 checkout (10+ users, requires Stripe payment)
+app.post("/register/checkout", async (req, res) => {
+    const { first_name, last_name, dob, gender, email, phone, password, membership_type, include_awards } = req.body;
+    if (!first_name || !last_name || !dob || !gender || !email || !phone || !password || !membership_type) {
         return res.status(400).json({ message: "All fields are required." });
     }
+    if (!["non_carded", "carded"].includes(membership_type)) {
+        return res.status(400).json({ message: "Invalid membership type." });
+    }
+    const age = computeAge(dob);
+    if (age === null) return res.status(400).json({ message: "Invalid date of birth." });
+    if (age < 10) return res.status(400).json({ message: "Members under 10 do not need a membership — please use the Minnow registration path." });
     try {
-        const existing = await query(`SELECT user_id FROM users WHERE email = "${email}" LIMIT 1`);
-        if (existing.length > 0) {
-            return res.status(400).json({ message: "An account with this email already exists." });
-        }
+        const existingUser = await query(`SELECT user_id FROM users WHERE email = '${email}' LIMIT 1`);
+        if (existingUser.length > 0) return res.status(400).json({ message: "An account with this email already exists." });
+
+        const prices = await getPrices();
+        const membershipAmt = prices["membership_" + membership_type];
+        if (!membershipAmt) return res.status(500).json({ message: "Pricing not configured. Contact an administrator." });
+        const awardsAmt  = include_awards ? (prices["awards_with_membership"] || 0) : 0;
+        const totalAmount = membershipAmt + awardsAmt;
+
         const hashed = await bcrypt.hash(password, 10);
-        await query(`
-            INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password)
-            VALUES ("${first_name}", "${last_name}", "${dob}", "${gender}", "${email}", "${phone}", "${hashed}")`);
-        res.redirect("/login");
+
+        await query(`DELETE FROM pending_registrations WHERE email = '${email}' AND status = 'pending'`);
+        await query(`INSERT INTO pending_registrations (first_name, last_name, date_of_birth, gender, email, phone, password_hash, membership_type, include_awards, amount_pence) VALUES ('${first_name}','${last_name}','${dob}','${gender}','${email}','${phone}','${hashed}','${membership_type}',${include_awards ? 1 : 0}, ${totalAmount})`);
+
+        const typeLabels = { non_carded: "Non-Carded Membership", carded: "Carded Membership" };
+        const baseUrl = req.protocol + "://" + req.get("host");
+
+        const lineItems = [{
+            price_data: { currency: "gbp", product_data: { name: "HOP Boxing Academy — " + typeLabels[membership_type] }, unit_amount: membershipAmt },
+            quantity: 1
+        }];
+        if (include_awards) {
+            lineItems.push({
+                price_data: { currency: "gbp", product_data: { name: "Boxing Awards Programme" }, unit_amount: awardsAmt },
+                quantity: 1
+            });
+        }
+
+        const stripeSession = await stripe.checkout.sessions.create({
+            payment_method_types: ["card"],
+            line_items: lineItems,
+            mode: "payment",
+            success_url: baseUrl + "/register/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url:  baseUrl + "/register"
+        });
+
+        await query(`UPDATE pending_registrations SET stripe_session_id = '${stripeSession.id}' WHERE email = '${email}' AND status = 'pending'`);
+        return res.json({ url: stripeSession.url });
     } catch (error) {
-        console.log(error);
+        console.error(error);
+        return res.status(500).json({ message: "Registration failed. Please try again." });
+    }
+});
+
+// Registration System — Minnow path (under 10, free account, no payment)
+app.post("/register/minnow", async (req, res) => {
+    const { first_name, last_name, dob, gender, email, phone, password } = req.body;
+    if (!first_name || !last_name || !dob || !gender || !email || !phone || !password) {
+        return res.status(400).json({ message: "All fields are required." });
+    }
+    const age = computeAge(dob);
+    if (age === null) return res.status(400).json({ message: "Invalid date of birth." });
+    if (age >= 10) return res.status(400).json({ message: "This registration path is only for Minnows (under 10)." });
+    try {
+        const existing = await query(`SELECT user_id FROM users WHERE email = '${email}' LIMIT 1`);
+        if (existing.length > 0) return res.status(400).json({ message: "An account with this email already exists." });
+        const hashed = await bcrypt.hash(password, 10);
+        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password) VALUES ('${first_name}','${last_name}','${dob}','${gender}','${email}','${phone}','${hashed}'\)`);
+        const created = await query(`SELECT * FROM users WHERE email = '${email}' LIMIT 1`);
+        req.session.user = {
+            user_id: created[0].user_id, first_name: created[0].first_name, last_name: created[0].last_name,
+            email: created[0].email, phone: created[0].phone, dob: created[0].date_of_birth,
+            gender: created[0].gender, is_admin: created[0].is_admin
+        };
+        return res.json({ redirect: "/dashboard" });
+    } catch (error) {
+        console.error(error);
         return res.status(500).json({ message: "Registration failed. Please try again." });
     }
 });
@@ -189,7 +494,7 @@ app.post("/register", async (req, res) => {
 app.post("/login", async (req, res) => {
     try {
         //find out if user email is stored in the system.
-        const users = await query(`SELECT * FROM users WHERE email = "${req.body.email}" LIMIT 1`);
+        const users = await query(`SELECT * FROM users WHERE email = '${req.body.email}' LIMIT 1`);
         //if the user can't be found
         if (users.length === 0) {
             return res.status(401).json({ message: "Login failed, user credentials could not be found!" });
@@ -215,7 +520,8 @@ app.post("/login", async (req, res) => {
         }
         return res.redirect("/dashboard");
     } catch (error) {
-        return res.status(500).json({ message: "SQL error" });
+        console.error("Login error:", error);
+        return res.status(500).json({ message: "Login failed. Please try again." });
     }
 });
 
@@ -237,9 +543,7 @@ app.get("/api/sessions", async (req, res) => {
         return res.redirect("/");
     }
     try {
-        const results = await query(`SELECT session_id, session_name, DATE_FORMAT(start_date, '%Y-%m-%d')
-             AS start_date, start_time, duration, instructor, capacity,
-             gender_eligibility, min_age, max_age, price_pence FROM sessions`);
+        const results = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, price_pence FROM sessions`);
         return res.json({ data: results });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -262,18 +566,16 @@ app.post("/api/bookings/checkout", async (req, res) => {
     if (start_date < today) {
         return res.status(400).json({ message: "This session can't be booked, it is in the past!" });
     }
-    if (capacity === 0) {
-        return res.status(400).json({ message: "This session can't be booked, there are no spaces left!" });
-    }
     if (start_date === today) {
         const now = new Date();
-        const current_time_str = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        const currentMins = now.getHours() * 60 + now.getMinutes();
         const [hrs, mins] = start_time.split(":");
-        const end_time = `${String(Number(hrs) + duration).padStart(2, "0")}:${mins}`;
-        if (current_time_str >= end_time) {
+        const startMins   = parseInt(hrs) * 60 + parseInt(mins);
+        const endMins     = startMins + duration * 60;
+        if (currentMins >= endMins) {
             return res.status(400).json({ message: "This session can't be booked, it already ended!" });
         }
-        if (current_time_str >= start_time) {
+        if (currentMins >= startMins) {
             return res.status(400).json({ message: "This session can't be booked, it already started!" });
         }
     }
@@ -282,11 +584,14 @@ app.post("/api/bookings/checkout", async (req, res) => {
         if (duplicate.length >= 1) {
             return res.status(400).json({ message: "This session has already been booked!" });
         }
-        const overlaps = await query(`SELECT b.booking_id FROM bookings b JOIN sessions s ON b.session_id = s.session_id WHERE b.user_id = ${user_id} AND DATE_FORMAT(s.start_date, '%Y-%m-%d') = '${start_date}' AND s.session_id != ${session_id} AND s.start_time < ADDTIME('${start_time}:00', SEC_TO_TIME(${duration} * 3600)) AND ADDTIME(s.start_time, SEC_TO_TIME(s.duration * 3600)) > '${start_time}:00'`);
+        const [newH, newM] = start_time.split(":");
+        const newStartMins = parseInt(newH) * 60 + parseInt(newM);
+        const newEndMins   = newStartMins + duration * 60;
+        const overlaps = await query(`SELECT b.booking_id FROM bookings b JOIN sessions s ON b.session_id = s.session_id WHERE b.user_id = ${user_id} AND s.start_date = '${start_date}' AND s.session_id != ${session_id} AND (CAST(substr(s.start_time,1,2) AS INTEGER)*60 + CAST(substr(s.start_time,4,2) AS INTEGER)) < ${newEndMins} AND (CAST(substr(s.start_time,1,2) AS INTEGER)*60 + CAST(substr(s.start_time,4,2) AS INTEGER) + s.duration*60) > ${newStartMins}`);
         if (overlaps.length > 0) {
             return res.status(400).json({ message: "You already have a booking that clashes with this session's time." });
         }
-        const memberships = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND '${start_date}' BETWEEN start_date AND end_date AND end_date >= CURDATE()`);
+        const memberships = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND '${start_date}' BETWEEN start_date AND end_date AND end_date >= date('now')`);
         if (memberships.length > 0) {
             return res.status(400).json({ message: "This session is already covered by your active membership. You have access to all sessions in this period — no individual booking is needed." });
         }
@@ -302,7 +607,23 @@ app.post("/api/bookings/checkout", async (req, res) => {
         }
         if (gender_eligibility !== "Any" && gender.toLowerCase() !== gender_eligibility.toLowerCase()) return res.status(400).json({ message: `This session is for ${gender_eligibility} only.` });
 
-        const sessionRow = await query(`SELECT price_pence FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
+        // Membership type eligibility — re-fetch from DB so client cannot spoof it
+        const sessionDetail = await query(`SELECT membership_eligibility, price_pence, capacity FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
+        if (sessionDetail.length === 0) return res.status(404).json({ message: "Session not found." });
+        if (sessionDetail[0].capacity <= 0) return res.status(400).json({ message: "This session can't be booked, there are no spaces left!" });
+        const memElig = sessionDetail.length > 0 ? (sessionDetail[0].membership_eligibility || "Any") : "Any";
+        if (memElig !== "Any") {
+            const gymMem = await query(`SELECT membership_type FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY created_at DESC LIMIT 1`);
+            const userMemType = gymMem.length > 0 ? gymMem[0].membership_type : null;
+            if (memElig === "Carded" && userMemType !== "carded") {
+                return res.status(400).json({ message: "This session is for Carded Boxers only. You need an active Carded membership to book." });
+            }
+            if (memElig === "Non-Carded" && userMemType !== "non_carded") {
+                return res.status(400).json({ message: "This session is for Non-Carded members only." });
+            }
+        }
+
+        const sessionRow = sessionDetail;
         const bookingPrice = sessionRow.length > 0 ? sessionRow[0].price_pence : 300;
         const baseUrl  = req.protocol + "://" + req.get("host");
         const stripeSession = await stripe.checkout.sessions.create({
@@ -319,7 +640,7 @@ app.post("/api/bookings/checkout", async (req, res) => {
             success_url: baseUrl + "/booking/success?session_id={CHECKOUT_SESSION_ID}",
             cancel_url:  baseUrl + "/dashboard"
         });
-        await query(`INSERT INTO payment_bookings (user_id, session_id, stripe_session_id, amount_pence, status) VALUES (${user_id}, ${session_id}, "${stripeSession.id}", ${bookingPrice}, "pending")`);
+        await query(`INSERT INTO payment_bookings (user_id, session_id, stripe_session_id, amount_pence, status) VALUES (${user_id}, ${session_id}, '${stripeSession.id}',${bookingPrice}, 'pending')`);
         return res.json({ url: stripeSession.url });
     } catch (error) {
         console.error(error);
@@ -338,7 +659,7 @@ app.get("/booking/success", async (req, res) => {
     }
     try {
         const payments = await query(`SELECT * FROM payment_bookings WHERE stripe_session_id = 
-            "${stripeSessionId}"`);
+            '${stripeSessionId}'`);
         if (payments.length === 0) {
             return res.redirect("/dashboard");
         }
@@ -348,7 +669,7 @@ app.get("/booking/success", async (req, res) => {
              return res.redirect("/dashboard"); // already processed
         }
         const stripeSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
-        if (stripeSession.payment_status !== "paid") {
+        if (stripeSession.payment_status !== 'paid') {
             return res.redirect("/dashboard");
         }
         await makeBooking({ session_id: payment.session_id }, req.session.user);
@@ -356,7 +677,7 @@ app.get("/booking/success", async (req, res) => {
         const bookings = await query(`SELECT booking_id FROM bookings WHERE user_id = 
             ${payment.user_id} AND session_id = ${payment.session_id} ORDER BY booking_id DESC LIMIT 1`);
         if (bookings.length > 0) {
-            await query(`UPDATE payment_bookings SET booking_id = ${bookings[0].booking_id}, status = "paid" WHERE payment_id = ${payment.payment_id}`);
+            await query(`UPDATE payment_bookings SET booking_id = ${bookings[0].booking_id}, status = 'paid' WHERE payment_id = ${payment.payment_id}`);
         }
         return res.redirect("/dashboard");
     } catch (error) {
@@ -370,7 +691,7 @@ async function makeBooking(session, user) {
     const qrCodeBuffer = await qrcode.toBuffer(qrcodeData);
 
     await query(`INSERT INTO bookings (user_id, session_id, qr_code) VALUES 
-        (${user.user_id}, ${session.session_id}, "${qrcodeData}")`);
+        (${user.user_id}, ${session.session_id}, '${qrcodeData}'\)`);
     await query(`UPDATE sessions SET capacity = capacity - 1 WHERE session_id = ${session.session_id}`);
 
     try {
@@ -395,8 +716,7 @@ app.get("/api/bookings", async (req, res) => {
             return res.json({ message: "No bookings found", data: [] });
         }
         const results = await Promise.all(bookings.map(async (booking) => {
-            const sessions = await query(`SELECT session_name, DATE_FORMAT(start_date, '%Y-%m-%d') 
-                AS start_date, start_time, duration FROM sessions WHERE session_id = ${booking.session_id}`);
+            const sessions = await query(`SELECT session_name, start_date, start_time, duration FROM sessions WHERE session_id = ${booking.session_id}`);
             if (sessions.length === 0) {
                 return null;
             };
@@ -420,10 +740,11 @@ app.get("/api/bookings", async (req, res) => {
 
 app.delete("/api/bookings", async (req, res) => {
     if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
+    if (!req.body || !req.body.booking_id) return res.status(400).json({ message: "Booking ID required" });
     const booking_id = req.body.booking_id;
     const user_id = req.session.user.user_id;
     try {
-        const bookings = await query(`SELECT b.session_id, DATE_FORMAT(s.start_date, '%Y-%m-%d') AS start_date FROM bookings b JOIN sessions s ON b.session_id = s.session_id WHERE b.booking_id = ${booking_id} AND b.user_id = ${user_id}`);
+        const bookings = await query(`SELECT b.session_id, s.start_date FROM bookings b JOIN sessions s ON b.session_id = s.session_id WHERE b.booking_id = ${booking_id} AND b.user_id = ${user_id}`);
         if (bookings.length === 0) { 
             return res.status(404).json({ message: "Booking not found" });
         };
@@ -449,23 +770,18 @@ app.get("/api/membership", async (req, res) => {
     }
     try {
         const user_id  = req.session.user.user_id;
-        await query(`UPDATE memberships SET status = 'expired' WHERE end_date < CURDATE() AND status = 'active'`);
-        const memberships = await query(`SELECT membership_id, membership_type, DATE_FORMAT(start_date, 
-            '%Y-%m-%d') AS start_date, DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date, status, qr_code FROM 
-            memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= CURDATE() ORDER BY
-             end_date DESC LIMIT 1`);
+        await query(`UPDATE memberships SET status = 'expired' WHERE end_date < date('now') AND status = 'active'`);
+        const memberships = await query(`SELECT membership_id, membership_type, start_date, end_date, status, qr_code FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
         if (memberships.length === 0) {
             return res.json({ data: null });
         };
         const membership = memberships[0];
         const today_str  = toLocalDateStr(new Date());
 
-        // Exclude sessions that have already passed AND sessions the user already booked
-        const sessions = await query(`SELECT session_id, session_name, DATE_FORMAT(start_date, 
-            '%Y-%m-%d') AS start_date, start_time, duration, instructor, capacity FROM sessions WHERE 
-            start_date BETWEEN '${membership.start_date}' AND '${membership.end_date}' AND
-             DATE_FORMAT(start_date, '%Y-%m-%d') >= '${today_str}' AND session_id NOT IN (SELECT 
-             session_id FROM bookings WHERE user_id = ${user_id}) ORDER BY start_date, start_time`);
+        // Exclude sessions that have already passed, sessions already booked, and sessions the user is ineligible for
+        const userAge    = computeAge(req.session.user.dob) ?? 0;
+        const userGender = req.session.user.gender || 'Any';
+        const sessions = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity FROM sessions WHERE start_date BETWEEN '${membership.start_date}' AND '${membership.end_date}' AND start_date >= '${today_str}' AND session_id NOT IN (SELECT session_id FROM bookings WHERE user_id = ${user_id}) AND (gender_eligibility = 'Any' OR gender_eligibility = '${userGender}') AND min_age <= ${userAge} AND max_age >= ${userAge} ORDER BY start_date, start_time`);
 
         return res.json({
             data: {
@@ -502,7 +818,7 @@ app.post("/api/membership/checkout", async (req, res) => {
         return res.status(400).json({ message: "Start date cannot be in the past." });
     }
     try {
-        const existing = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= CURDATE()`);
+        const existing = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now')`);
         if (existing.length > 0) {
             return res.status(400).json({ message: "You already have an active membership." });
         }
@@ -535,7 +851,7 @@ app.post("/api/membership/checkout", async (req, res) => {
             cancel_url:  baseUrl + "/dashboard"
         });
 
-        await query(`INSERT INTO payment_memberships (user_id, membership_type, start_date, end_date, stripe_session_id, amount_pence, status) VALUES (${user_id}, "${membership_type}", "${start_date}", "${end_date}", "${stripeSession.id}", ${amount}, "pending")`);
+        await query(`INSERT INTO payment_memberships (user_id, membership_type, start_date, end_date, stripe_session_id, amount_pence, status) VALUES (${user_id}, '${membership_type}','${start_date}','${end_date}','${stripeSession.id}',${amount}, 'pending')`);
         return res.json({ url: stripeSession.url });
     } catch (error) {
         console.error(error);
@@ -554,7 +870,7 @@ app.get("/membership/success", async (req, res) => {
         return res.redirect("/dashboard");
     }
     try {
-        const payments = await query(`SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date_str, DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date_str FROM payment_memberships WHERE stripe_session_id = "${stripeSessionId}"`);
+        const payments = await query(`SELECT * FROM payment_memberships WHERE stripe_session_id = '${stripeSessionId}'`);
         if (payments.length === 0) {
             return res.redirect("/dashboard");
         }
@@ -563,17 +879,17 @@ app.get("/membership/success", async (req, res) => {
         if (payment.membership_id !== null) {
             return res.redirect("/dashboard"); // already processed
         }
-        
+
         const stripeSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
-        if (stripeSession.payment_status !== "paid") {
+        if (stripeSession.payment_status !== 'paid') {
             return res.redirect("/dashboard");
         }
         const qr_data = crypto.randomUUID();
-        await query(`INSERT INTO memberships (user_id, membership_type, start_date, end_date, status, qr_code) VALUES (${payment.user_id}, "${payment.membership_type}", "${payment.start_date_str}", "${payment.end_date_str}", "active", "${qr_data}")`);
+        await query(`INSERT INTO memberships (user_id, membership_type, start_date, end_date, status, qr_code) VALUES (${payment.user_id}, '${payment.membership_type}','${payment.start_date}','${payment.end_date}','active', '${qr_data}'\)`);
 
-        const memberships = await query(`SELECT membership_id FROM memberships WHERE user_id = ${payment.user_id} AND qr_code = "${qr_data}" LIMIT 1`);
+        const memberships = await query(`SELECT membership_id FROM memberships WHERE user_id = ${payment.user_id} AND qr_code = '${qr_data}' LIMIT 1`);
         if (memberships.length > 0) {
-            await query(`UPDATE payment_memberships SET membership_id = ${memberships[0].membership_id}, status = "paid" WHERE payment_id = ${payment.payment_id}`);
+            await query(`UPDATE payment_memberships SET membership_id = ${memberships[0].membership_id}, status = 'paid' WHERE payment_id = ${payment.payment_id}`);
         }
         return res.redirect("/dashboard");
     } catch (error) {
@@ -589,18 +905,14 @@ app.get("/membership/success", async (req, res) => {
 
 app.post("/attendance", async (req, res) => {
     if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
+    if (!req.body || !req.body.decodedText) return res.json({ message: "❌ No QR data received" });
     try {
-        const sessions = await query(`
-            SELECT session_id, session_name,
-                   DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
-                   start_time, duration
-            FROM sessions WHERE qr_code = "${req.body.decodedText}" LIMIT 1
-        `);
+        const sessions = await query(`SELECT session_id, session_name, start_date, start_time, duration, gender_eligibility, min_age, max_age FROM sessions WHERE qr_code = '${req.body.decodedText}' LIMIT 1`);
         if (sessions.length === 0) return res.json({ message: "❌ Invalid session QR code" });
 
-        const session          = sessions[0];
-        const now              = new Date();
-        const current_date     = toLocalDateStr(now);
+        const session = sessions[0];
+        const now  = new Date();
+        const current_date = toLocalDateStr(now);
         const current_time_str = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
 
         if (current_date !== session.start_date) return res.json({ message: "❌ This session is not today" });
@@ -620,10 +932,20 @@ app.post("/attendance", async (req, res) => {
                 SELECT membership_id FROM memberships
                 WHERE user_id = ${user_id} AND status = 'active'
                 AND '${session.start_date}' BETWEEN start_date AND end_date
-                AND end_date >= CURDATE() LIMIT 1
+                AND end_date >= date('now') LIMIT 1
             `);
             if (memberships.length === 0) {
                 return res.json({ message: "❌ You don't have a booking or active membership for this session" });
+            }
+
+            // Validate the ticket holder is eligible for this specific session
+            const userAge    = computeAge(req.session.user.dob) ?? 0;
+            const userGender = req.session.user.gender || 'Any';
+            if (session.gender_eligibility !== 'Any' && session.gender_eligibility !== userGender) {
+                return res.json({ message: "❌ This session is not open to your gender" });
+            }
+            if (userAge < session.min_age || userAge > session.max_age) {
+                return res.json({ message: "❌ This session is not available for your age group" });
             }
         }
 
@@ -644,9 +966,9 @@ app.post("/attendance", async (req, res) => {
 
         // Record attendance
         if (booking_id) {
-            await query(`INSERT INTO attendance (booking_id, user_id, session_id, checkin_datetime) VALUES (${booking_id}, ${user_id}, ${session.session_id}, "${current_date} ${current_time_str}:00")`);
+            await query(`INSERT INTO attendance (booking_id, user_id, session_id, checkin_datetime) VALUES (${booking_id}, ${user_id}, ${session.session_id}, '${current_date} ${current_time_str}:00')`);
         } else {
-            await query(`INSERT INTO attendance (user_id, session_id, checkin_datetime) VALUES (${user_id}, ${session.session_id}, "${current_date} ${current_time_str}:00")`);
+            await query(`INSERT INTO attendance (user_id, session_id, checkin_datetime) VALUES (${user_id}, ${session.session_id}, '${current_date} ${current_time_str}:00')`);
         }
 
         let label;
@@ -666,32 +988,43 @@ app.post("/attendance", async (req, res) => {
 // Admin scans a member's membership QR code to verify it is currently valid.
 
 app.post("/api/admin/verify-membership", async (req, res) => {
-    if (!req.session.user || !req.session.user.is_admin) return res.status(403).json({ message: "Access denied" });
+    if (!req.session.user || !req.session.user.is_admin) return res.status(403).json({ status: "invalid", message: "❌ Access denied" });
+    const raw = (req.body && req.body.decodedText) ? req.body.decodedText.trim() : "";
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!raw || !uuidPattern.test(raw)) return res.json({ status: "invalid", message: "❌ Invalid QR code." });
     try {
-        const memberships = await query(`
-            SELECT m.membership_type,
-                   DATE_FORMAT(m.start_date, '%Y-%m-%d') AS start_date,
-                   DATE_FORMAT(m.end_date,   '%Y-%m-%d') AS end_date,
-                   m.status, u.first_name, u.last_name
-            FROM memberships m
-            JOIN users u ON m.user_id = u.user_id
-            WHERE m.qr_code = "${req.body.decodedText}" LIMIT 1
-        `);
-        if (memberships.length === 0) return res.json({ message: "❌ Invalid membership QR code" });
+        const today = toLocalDateStr(new Date());
 
-        const mem     = memberships[0];
-        const today   = toLocalDateStr(new Date());
-        const name    = mem.first_name + " " + mem.last_name;
-        const typeMap = { day: "Day Pass", weekly: "Weekly Pass", monthly: "Monthly Pass" };
-        const label   = typeMap[mem.membership_type] || mem.membership_type;
+        // Check annual gym membership first
+        const gymRows = await query(`SELECT gm.membership_type, gm.end_date, gm.status, gm.has_boxing_awards, u.first_name, u.last_name FROM gym_memberships gm JOIN users u ON u.user_id = gm.user_id WHERE gm.qr_code = '${raw}' LIMIT 1`);
+        if (gymRows.length > 0) {
+            const mem = gymRows[0];
+            const gymTypeLabels = { carded: "Carded", non_carded: "Non-Carded", minnow_carded: "Minnows (Carded)", minnow_non_carded: "Minnows (Non-Carded)" };
+            const typeLabel = gymTypeLabels[mem.membership_type] || mem.membership_type;
+            const isExpired = mem.end_date < today || mem.status === "expired";
+            const name = mem.first_name + " " + mem.last_name;
+            if (!isExpired && mem.status === "active")
+                return res.json({ status: "valid", message: "✅ Valid Membership", name, type: typeLabel, awards: !!mem.has_boxing_awards, end_date: mem.end_date });
+            if (isExpired)
+                return res.json({ status: "expired", message: "⏰ Membership Expired", name, type: typeLabel, awards: !!mem.has_boxing_awards, end_date: mem.end_date });
+            return res.json({ status: "invalid", message: "❌ Membership Inactive", name, type: typeLabel, awards: false, end_date: mem.end_date });
+        }
 
-        if (mem.status !== "active" || today > mem.end_date)
-            return res.json({ message: `❌ ${name} — ${label} (expired ${mem.end_date})` });
-        if (today < mem.start_date)
-            return res.json({ message: `⚠️ ${name} — ${label} (starts ${mem.start_date})` });
-        return res.json({ message: `✅ ${name} — ${label} (valid until ${mem.end_date})` });
+        // Check ticket pass (day / weekly / monthly)
+        const passRows = await query(`SELECT m.membership_type, m.start_date, m.end_date, m.status, u.first_name, u.last_name FROM memberships m JOIN users u ON u.user_id = m.user_id WHERE m.qr_code = '${raw}' LIMIT 1`);
+        if (passRows.length === 0) return res.json({ status: "invalid", message: "❌ QR code not found." });
+        const pass = passRows[0];
+        const ticketLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
+        const typeLabel = ticketLabels[pass.membership_type] || pass.membership_type;
+        const name = pass.first_name + " " + pass.last_name;
+        if (pass.start_date > today)
+            return res.json({ status: "expired", message: "⏰ Ticket Not Yet Valid", name, type: typeLabel, start_date: pass.start_date, end_date: pass.end_date });
+        if (pass.end_date < today || pass.status !== "active")
+            return res.json({ status: "expired", message: "⏰ Ticket Expired", name, type: typeLabel, start_date: pass.start_date, end_date: pass.end_date });
+        return res.json({ status: "valid", message: "✅ Valid Ticket", name, type: typeLabel, start_date: pass.start_date, end_date: pass.end_date });
     } catch (error) {
-        return res.status(500).json({ message: "Server error" });
+        console.error("Verify membership error:", error);
+        return res.status(500).json({ status: "invalid", message: "❌ Server error." });
     }
 });
 
@@ -709,11 +1042,12 @@ app.get("/api/pricing", async (_req, res) => {
 
 app.put("/api/admin/pricing", async (req, res) => {
     if (!req.session.user || !req.session.user.is_admin) return res.status(403).json({ message: "Access denied" });
+    if (!req.body) return res.status(400).json({ message: "Request body required" });
     try {
         for (const [key, value] of Object.entries(req.body)) {
             const pence = Math.round(parseFloat(value) * 100);
             if (isNaN(pence) || pence < 0) return res.status(400).json({ message: `Invalid value for ${key}.` });
-            await query(`UPDATE pricing SET value_pence = ${pence} WHERE price_key = "${key}"`);
+            await query(`UPDATE pricing SET value_pence = ${pence} WHERE price_key = '${key}'`);
         }
         return res.json({ message: "Prices updated successfully." });
     } catch (error) {
@@ -728,35 +1062,91 @@ app.get("/api/gym-membership", async (req, res) => {
     if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
     const user_id = req.session.user.user_id;
     try {
-        await query(`UPDATE gym_memberships SET status = 'expired' WHERE end_date < CURDATE() AND status = 'active'`);
-        const rows = await query(`
-            SELECT gym_membership_id, membership_type,
-                   DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
-                   DATE_FORMAT(end_date,   '%Y-%m-%d') AS end_date,
-                   status
-            FROM gym_memberships
-            WHERE user_id = ${user_id} AND status = 'active' AND end_date >= CURDATE()
-            ORDER BY end_date DESC LIMIT 1
-        `);
+        await query(`UPDATE gym_memberships SET status = 'expired' WHERE end_date < date('now') AND status = 'active'`);
+        const rows = await query(`SELECT gym_membership_id, membership_type, start_date, end_date, status, has_boxing_awards, qr_code FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
         return res.json({ data: rows.length > 0 ? rows[0] : null });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
     }
 });
 
+app.get("/api/member/membership-qr", async (req, res) => {
+    if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
+    const user_id = req.session.user.user_id;
+    try {
+        const rows = await query(`SELECT qr_code FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
+        if (rows.length === 0) return res.status(404).json({ message: "No active membership." });
+        const dataUrl = await qrcode.toDataURL(rows[0].qr_code, { width: 300, margin: 2 });
+        return res.json({ data: dataUrl });
+    } catch (error) {
+        console.error("Membership QR error:", error);
+        return res.status(500).json({ message: "Failed to generate QR code." });
+    }
+});
+
+app.get("/api/member/pass-qr", async (req, res) => {
+    if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
+    const user_id = req.session.user.user_id;
+    try {
+        await query(`UPDATE memberships SET status = 'expired' WHERE end_date < date('now') AND status = 'active'`);
+        const rows = await query(`SELECT qr_code FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
+        if (rows.length === 0) return res.status(404).json({ message: "No active ticket pass." });
+        const dataUrl = await qrcode.toDataURL(rows[0].qr_code, { width: 300, margin: 2 });
+        return res.json({ data: dataUrl });
+    } catch (error) {
+        console.error("Pass QR error:", error);
+        return res.status(500).json({ message: "Failed to generate QR code." });
+    }
+});
+
+app.post("/api/gym-membership/free", async (req, res) => {
+    if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
+    const user_id = req.session.user.user_id;
+    const membership_type = (req.body && req.body.membership_type) || "minnow_non_carded";
+    if (!["minnow_carded", "minnow_non_carded"].includes(membership_type))
+        return res.status(400).json({ message: "Invalid membership type." });
+
+    const age = computeAge(req.session.user.dob);
+    if (age === null || age >= 10)
+        return res.status(400).json({ message: "Minnow membership is only available to members under 10." });
+
+    try {
+        const existing = await query(`SELECT gym_membership_id FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') LIMIT 1`);
+        if (existing.length > 0) return res.status(400).json({ message: "You already have an active gym membership." });
+
+        const start_date = toLocalDateStr(new Date());
+        const endDate    = new Date();
+        endDate.setFullYear(endDate.getFullYear() + 1);
+        endDate.setDate(endDate.getDate() - 1);
+        const end_date = toLocalDateStr(endDate);
+        const qr_code  = crypto.randomUUID();
+
+        await query(`INSERT INTO gym_memberships (user_id, membership_type, start_date, end_date, status, qr_code, has_boxing_awards) VALUES (${user_id}, '${membership_type}','${start_date}','${end_date}','active','${qr_code}',0)`);
+        const created = await query(`SELECT gym_membership_id FROM gym_memberships WHERE user_id = ${user_id} AND qr_code = '${qr_code}' LIMIT 1`);
+        await query(`INSERT INTO payment_gym_memberships (user_id, membership_type, start_date, end_date, stripe_session_id, amount_pence, status, gym_membership_id, include_awards) VALUES (${user_id}, '${membership_type}','${start_date}','${end_date}','free-${user_id}',0,'paid',${created[0].gym_membership_id},0)`);
+
+        return res.json({ message: "Minnow membership activated." });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: "Failed to activate membership. Please try again." });
+    }
+});
+
 app.post("/api/gym-membership/checkout", async (req, res) => {
     if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
     const user_id = req.session.user.user_id;
-    const { membership_type } = req.body;
+    const { membership_type, include_awards } = req.body;
     if (!["non_carded", "carded"].includes(membership_type))
         return res.status(400).json({ message: "Invalid membership type." });
     try {
-        const existing = await query(`SELECT gym_membership_id FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= CURDATE() LIMIT 1`);
+        const existing = await query(`SELECT gym_membership_id FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') LIMIT 1`);
         if (existing.length > 0) return res.status(400).json({ message: "You already have an active gym membership." });
 
-        const prices  = await getPrices();
-        const amount  = prices["membership_" + membership_type];
-        if (!amount)  return res.status(500).json({ message: "Pricing not configured. Contact an administrator." });
+        const prices         = await getPrices();
+        const membershipAmt  = prices["membership_" + membership_type];
+        if (!membershipAmt)  return res.status(500).json({ message: "Pricing not configured. Contact an administrator." });
+        const awardsAmt      = include_awards ? (prices["awards_with_membership"] || 0) : 0;
+        const totalAmount    = membershipAmt + awardsAmt;
 
         const start_date = toLocalDateStr(new Date());
         const endDate    = new Date();
@@ -764,27 +1154,39 @@ app.post("/api/gym-membership/checkout", async (req, res) => {
         endDate.setDate(endDate.getDate() - 1);
         const end_date   = toLocalDateStr(endDate);
 
-        const typeLabels = { non_carded: "Non-Carded Boxer", carded: "Carded Boxer" };
+        const typeLabels = { non_carded: "Non-Carded Membership", carded: "Carded Membership" };
         const baseUrl    = req.protocol + "://" + req.get("host");
+
+        const lineItems = [{
+            price_data: {
+                currency: "gbp",
+                product_data: { name: "HOP Boxing Academy — " + typeLabels[membership_type] },
+                unit_amount: membershipAmt
+            },
+            quantity: 1
+        }];
+        if (include_awards) {
+            lineItems.push({
+                price_data: {
+                    currency: "gbp",
+                    product_data: { name: "Boxing Awards Programme" },
+                    unit_amount: awardsAmt
+                },
+                quantity: 1
+            });
+        }
 
         const stripeSession = await stripe.checkout.sessions.create({
             payment_method_types: ["card"],
-            line_items: [{
-                price_data: {
-                    currency: "gbp",
-                    product_data: { name: "HOP Boxing Academy — Annual Gym Membership (" + typeLabels[membership_type] + ")" },
-                    unit_amount: amount
-                },
-                quantity: 1
-            }],
+            line_items: lineItems,
             mode: "payment",
             success_url: baseUrl + "/gym-membership/success?session_id={CHECKOUT_SESSION_ID}",
             cancel_url:  baseUrl + "/dashboard"
         });
 
         await query(`
-            INSERT INTO payment_gym_memberships (user_id, membership_type, start_date, end_date, stripe_session_id, amount_pence, status)
-            VALUES (${user_id}, "${membership_type}", "${start_date}", "${end_date}", "${stripeSession.id}", ${amount}, "pending")
+            INSERT INTO payment_gym_memberships (user_id, membership_type, start_date, end_date, stripe_session_id, amount_pence, status, include_awards)
+            VALUES (${user_id}, '${membership_type}','${start_date}','${end_date}','${stripeSession.id}',${totalAmount}, 'pending', ${include_awards ? 1 : 0})
         `);
         return res.json({ url: stripeSession.url });
     } catch (error) {
@@ -798,26 +1200,84 @@ app.get("/gym-membership/success", async (req, res) => {
     const stripeSessionId = req.query.session_id;
     if (!stripeSessionId) return res.redirect("/dashboard");
     try {
-        const payments = await query(`
-            SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date_str, DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date_str
-            FROM payment_gym_memberships WHERE stripe_session_id = "${stripeSessionId}"
-        `);
+        const payments = await query(`SELECT * FROM payment_gym_memberships WHERE stripe_session_id = '${stripeSessionId}'`);
         if (payments.length === 0) return res.redirect("/dashboard");
         const payment = payments[0];
         if (payment.gym_membership_id !== null) return res.redirect("/dashboard");
 
         const stripeSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
-        if (stripeSession.payment_status !== "paid") return res.redirect("/dashboard");
+        if (stripeSession.payment_status !== 'paid') return res.redirect("/dashboard");
 
         const qr_code = crypto.randomUUID();
-        await query(`
-            INSERT INTO gym_memberships (user_id, membership_type, start_date, end_date, status, qr_code)
-            VALUES (${payment.user_id}, "${payment.membership_type}", "${payment.start_date_str}", "${payment.end_date_str}", "active", "${qr_code}")
-        `);
-        const created = await query(`SELECT gym_membership_id FROM gym_memberships WHERE user_id = ${payment.user_id} AND qr_code = "${qr_code}" LIMIT 1`);
+        await query(`INSERT INTO gym_memberships (user_id, membership_type, start_date, end_date, status, qr_code, has_boxing_awards) VALUES (${payment.user_id}, '${payment.membership_type}','${payment.start_date}','${payment.end_date}','active', '${qr_code}',${payment.include_awards ? 1 : 0})`);
+        const created = await query(`SELECT gym_membership_id FROM gym_memberships WHERE user_id = ${payment.user_id} AND qr_code = '${qr_code}' LIMIT 1`);
         if (created.length > 0) {
-            await query(`UPDATE payment_gym_memberships SET gym_membership_id = ${created[0].gym_membership_id}, status = "paid" WHERE payment_id = ${payment.payment_id}`);
+            await query(`UPDATE payment_gym_memberships SET gym_membership_id = ${created[0].gym_membership_id}, status = 'paid' WHERE payment_id = ${payment.payment_id}`);
         }
+        return res.redirect("/dashboard");
+    } catch (error) {
+        console.error(error);
+        return res.redirect("/dashboard");
+    }
+});
+
+
+// ── Boxing Awards Programme (standalone purchase) ──────────────────────────────
+
+app.post("/api/boxing-awards/checkout", async (req, res) => {
+    if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
+    const user_id = req.session.user.user_id;
+    try {
+        await query(`UPDATE gym_memberships SET status = 'expired' WHERE end_date < date('now') AND status = 'active'`);
+        const memberships = await query(`SELECT gym_membership_id, has_boxing_awards FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
+        if (memberships.length === 0)
+            return res.status(400).json({ message: "You need an active gym membership to purchase the Boxing Awards Programme." });
+        if (memberships[0].has_boxing_awards)
+            return res.status(400).json({ message: "You already have the Boxing Awards Programme." });
+
+        const prices = await getPrices();
+        const amount = prices["awards_standalone"];
+        if (!amount) return res.status(500).json({ message: "Pricing not configured. Contact an administrator." });
+
+        const baseUrl = req.protocol + "://" + req.get("host");
+        const stripeSession = await stripe.checkout.sessions.create({
+            payment_method_types: ["card"],
+            line_items: [{
+                price_data: {
+                    currency: "gbp",
+                    product_data: { name: "HOP Boxing Academy — Boxing Awards Programme" },
+                    unit_amount: amount
+                },
+                quantity: 1
+            }],
+            mode: "payment",
+            success_url: baseUrl + "/boxing-awards/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url:  baseUrl + "/dashboard"
+        });
+
+        await query(`INSERT INTO payment_boxing_awards (user_id, gym_membership_id, stripe_session_id, amount_pence, status) VALUES (${user_id}, ${memberships[0].gym_membership_id}, '${stripeSession.id}',${amount}, 'pending')`);
+        return res.json({ url: stripeSession.url });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: "Failed to start checkout. Please try again." });
+    }
+});
+
+app.get("/boxing-awards/success", async (req, res) => {
+    if (!req.session.user) return res.redirect("/login");
+    const stripeSessionId = req.query.session_id;
+    if (!stripeSessionId) return res.redirect("/dashboard");
+    try {
+        const payments = await query(`SELECT * FROM payment_boxing_awards WHERE stripe_session_id = '${stripeSessionId}'`);
+        if (payments.length === 0) return res.redirect("/dashboard");
+        const payment = payments[0];
+        if (payment.status === 'paid') return res.redirect("/dashboard");
+
+        const stripeSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
+        if (stripeSession.payment_status !== 'paid') return res.redirect("/dashboard");
+
+        await query(`UPDATE gym_memberships SET has_boxing_awards = 1 WHERE gym_membership_id = ${payment.gym_membership_id}`);
+        await query(`UPDATE payment_boxing_awards SET status = 'paid' WHERE payment_id = ${payment.payment_id}`);
         return res.redirect("/dashboard");
     } catch (error) {
         console.error(error);
@@ -833,9 +1293,7 @@ app.get("/api/admin/sessions", async (req, res) => {
         return res.status(403).json({ message: "Access denied" });
     }
     try {
-        const results = await query(`SELECT session_id, session_name, DATE_FORMAT(start_date, '%Y-%m-%d')
-            AS start_date, start_time, duration, instructor, capacity, gender_eligibility, min_age, max_age, qr_code, price_pence
-            FROM sessions ORDER BY start_date ASC, start_time ASC`);
+        const results = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, min_age, max_age, qr_code, price_pence FROM sessions ORDER BY start_date ASC, start_time ASC`);
         return res.json({ data: results });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -855,8 +1313,8 @@ app.get("/api/admin/sessions/:id/qr", async (req, res) => {
 });
 
 function validateSessionFields(body, today) {
-    const { session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, 
-        min_age, max_age } = body;
+    const { session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility,
+        membership_eligibility, min_age, max_age } = body;
     if (!session_name || String(session_name).trim() === "") {
         return "Session name is required.";
     }
@@ -870,7 +1328,7 @@ function validateSessionFields(body, today) {
          return "Start time is required.";
     }
     if (duration !== 1 && duration !== 2) {
-        return "Duration must be 1 or 2 hours."; 
+        return "Duration must be 1 or 2 hours.";
     }
     if (!instructor || String(instructor).trim() === "") {
         return "Instructor is required.";
@@ -881,15 +1339,14 @@ function validateSessionFields(body, today) {
     if (!["Any","Male","Female"].includes(gender_eligibility)) {
         return "Gender eligibility must be Any, Male, or Female.";
     }
+    if (!["Any","Carded","Non-Carded"].includes(membership_eligibility)) {
+        return "Membership eligibility must be Any, Carded, or Non-Carded.";
+    }
     if (!Number.isInteger(min_age) || min_age < 0) {
         return "Min age must be a non-negative whole number.";
     }
     if (!Number.isInteger(max_age) || max_age < min_age) {
         return "Max age must be a whole number ≥ min age.";
-    }
-    const price = body.price_pence;
-    if (!Number.isInteger(price) || price < 0) {
-        return "Price must be a non-negative whole number (in pence).";
     }
     return null;
 }
@@ -898,13 +1355,17 @@ app.post("/api/admin/sessions", async (req, res) => {
     if (!req.session.user || !req.session.user.is_admin) {
         return res.status(403).json({ message: "Access denied" });
     }
-    const { session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, min_age, max_age, price_pence } = req.body;
+    const { session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age } = req.body;
     const today = toLocalDateStr(new Date());
     const err = validateSessionFields(req.body, today);
     if (err) return res.status(400).json({ message: err });
     try {
+        const prices     = await getPrices();
+        const price_pence = max_age < 10
+            ? (prices.session_minnows || 300)
+            : (prices.session_standard || 400);
         const sessionQR = crypto.randomUUID();
-        await query(`INSERT INTO sessions (session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, min_age, max_age, qr_code, price_pence) VALUES ("${session_name}", "${start_date}", "${start_time}:00", ${duration}, "${instructor}", ${capacity}, "${gender_eligibility}", ${min_age}, ${max_age}, "${sessionQR}", ${price_pence})`);
+        await query(`INSERT INTO sessions (session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, qr_code, price_pence) VALUES ('${session_name}','${start_date}','${start_time}:00', ${duration}, '${instructor}',${capacity}, '${gender_eligibility}','${membership_eligibility}',${min_age}, ${max_age}, '${sessionQR}',${price_pence})`);
         return res.json({ message: "Session created successfully" });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -915,16 +1376,20 @@ app.put("/api/admin/sessions", async (req, res) => {
     if (!req.session.user || !req.session.user.is_admin) {
         return res.status(403).json({ message: "Access denied" });
     }
-    const { session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, min_age, max_age, price_pence } = req.body;
+    const { session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age } = req.body;
     if (!session_id) return res.status(400).json({ message: "Session ID is required." });
     try {
-        const existing = await query(`SELECT DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date FROM sessions WHERE session_id = ${session_id}`);
+        const existing = await query(`SELECT start_date FROM sessions WHERE session_id = ${session_id}`);
         if (existing.length === 0) return res.status(404).json({ message: "Session not found." });
         const today = toLocalDateStr(new Date());
         if (existing[0].start_date < today) return res.status(400).json({ message: "Cannot edit a session that is in the past." });
         const err = validateSessionFields(req.body, today);
         if (err) return res.status(400).json({ message: err });
-        await query(`UPDATE sessions SET session_name="${session_name}", start_date="${start_date}", start_time="${start_time}:00", duration=${duration}, instructor="${instructor}", capacity=${capacity}, gender_eligibility="${gender_eligibility}", min_age=${min_age}, max_age=${max_age}, price_pence=${price_pence} WHERE session_id=${session_id}`);
+        const prices      = await getPrices();
+        const price_pence = max_age < 10
+            ? (prices.session_minnows || 300)
+            : (prices.session_standard || 400);
+        await query(`UPDATE sessions SET session_name='${session_name}',start_date='${start_date}',start_time='${start_time}:00', duration=${duration}, instructor='${instructor}',capacity=${capacity}, gender_eligibility='${gender_eligibility}',membership_eligibility='${membership_eligibility}',min_age=${min_age}, max_age=${max_age}, price_pence=${price_pence} WHERE session_id=${session_id}`);
         return res.json({ message: "Session updated successfully" });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -935,9 +1400,10 @@ app.delete("/api/admin/sessions", async (req, res) => {
     if (!req.session.user || !req.session.user.is_admin) {
         return res.status(403).json({ message: "Access denied" });
     }
+    if (!req.body || !req.body.session_id) return res.status(400).json({ message: "Session ID required" });
     const session_id = req.body.session_id;
     try {
-        const existing = await query(`SELECT DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date FROM sessions WHERE session_id = ${session_id}`);
+        const existing = await query(`SELECT start_date FROM sessions WHERE session_id = ${session_id}`);
         if (existing.length === 0) {
             return res.status(404).json({ message: "Session not found" });
         }
@@ -964,9 +1430,7 @@ app.get("/api/admin/customers", async (req, res) => {
         return res.status(403).json({ message: "Access denied" });
     }
     try {
-        const results = await query(`SELECT user_id, first_name, last_name, email, phone, gender, 
-            DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth FROM users WHERE is_admin = 0 
-            ORDER BY last_name ASC, first_name ASC`);
+        const results = await query(`SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth FROM users WHERE is_admin = 0 ORDER BY last_name ASC, first_name ASC`);
         return res.json({ data: results });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -980,22 +1444,13 @@ app.get("/api/admin/customers/:id", async (req, res) => {
     }
     const customer_id = Number(req.params.id);
     try {
-        const users = await query(`SELECT user_id, first_name, last_name, email, phone, gender, 
-            DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth FROM users WHERE user_id = 
-            ${customer_id} AND is_admin = 0`);
+        const users = await query(`SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth FROM users WHERE user_id = ${customer_id} AND is_admin = 0`);
         if (users.length === 0) {
             return res.status(404).json({ message: "Customer not found" });
         }
-        const memberships = await query(`SELECT membership_id, membership_type, DATE_FORMAT(start_date, 
-            '%Y-%m-%d') AS start_date, DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date, status FROM 
-            memberships WHERE user_id = ${customer_id} ORDER BY end_date DESC LIMIT 1`);
-        const bookings = await query(`SELECT b.booking_id, s.session_name, 
-            DATE_FORMAT(s.start_date, '%Y-%m-%d') AS start_date, s.start_time, s.duration, 
-            a.checkin_datetime FROM bookings b LEFT JOIN sessions s ON b.session_id = s.session_id LEFT 
-            JOIN attendance a ON b.booking_id = a.booking_id WHERE b.user_id = ${customer_id} 
-            ORDER BY s.start_date DESC, s.start_time DESC`);
-        return res.json({ data: { user: users[0], membership: memberships.length > 0 ? memberships[0] : 
-            null, bookings } });
+        const memberships = await query(`SELECT gym_membership_id AS membership_id, membership_type, start_date, end_date, status, has_boxing_awards FROM gym_memberships WHERE user_id = ${customer_id} ORDER BY end_date DESC LIMIT 1`);
+        const bookings = await query(`SELECT b.booking_id, s.session_name, s.start_date, s.start_time, s.duration, a.checkin_datetime FROM bookings b LEFT JOIN sessions s ON b.session_id = s.session_id LEFT JOIN attendance a ON b.booking_id = a.booking_id WHERE b.user_id = ${customer_id} ORDER BY s.start_date DESC, s.start_time DESC`);
+        return res.json({ data: { user: users[0], membership: memberships.length > 0 ? memberships[0] : null, bookings } });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
     }
@@ -1016,11 +1471,11 @@ app.put("/api/admin/customers/:id", async (req, res) => {
         if (existing.length === 0) {
             return res.status(404).json({ message: "Customer not found" });
         }
-        const emailCheck  = await query(`SELECT user_id FROM users WHERE email = "${email}" AND user_id != ${customer_id}`);
+        const emailCheck  = await query(`SELECT user_id FROM users WHERE email = '${email}' AND user_id != ${customer_id}`);
         if (emailCheck.length > 0) {
             return res.status(400).json({ message: "This email is already in use by another account." });
         }
-        await query(`UPDATE users SET first_name="${first_name}", last_name="${last_name}", email="${email}", phone="${phone}", gender="${gender}", date_of_birth="${date_of_birth}" WHERE user_id=${customer_id} AND is_admin=0`);
+        await query(`UPDATE users SET first_name='${first_name}',last_name='${last_name}',email='${email}',phone='${phone}',gender='${gender}',date_of_birth='${date_of_birth}' WHERE user_id=${customer_id} AND is_admin=0`);
         return res.json({ message: "Customer updated successfully." });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1061,9 +1516,7 @@ app.get("/api/admin/staff", async (req, res) => {
         return res.status(403).json({ message: "Access denied" });
     }
     try {
-        const results = await query(`SELECT user_id, first_name, last_name, email, phone, gender, 
-            DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth FROM users WHERE is_admin = 1 ORDER BY
-             last_name ASC, first_name ASC`);
+        const results = await query(`SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth FROM users WHERE is_admin = 1 ORDER BY last_name ASC, first_name ASC`);
         return res.json({ data: results });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1079,12 +1532,12 @@ app.post("/api/admin/staff", async (req, res) => {
         return res.status(400).json({ message: "All fields are required."});
     }
     try {
-        const existing = await query(`SELECT user_id FROM users WHERE email = "${email}"`);
+        const existing = await query(`SELECT user_id FROM users WHERE email = '${email}'`);
         if (existing.length > 0) {
             return res.status(400).json({ message: "An account with this email already exists." });
         }
         const hashed = await bcrypt.hash(password, 10);
-        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password, is_admin) VALUES ("${first_name}", "${last_name}", "${date_of_birth}", "${gender}", "${email}", "${phone}", "${hashed}", 1)`);
+        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password, is_admin) VALUES ('${first_name}','${last_name}','${date_of_birth}','${gender}','${email}','${phone}','${hashed}',1)`);
         return res.json({ message: "Staff account created successfully."});
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1106,11 +1559,11 @@ app.put("/api/admin/staff/:id", async (req, res) => {
         if (existing.length === 0) {
             return res.status(404).json({ message: "Staff member not found" });
         }
-        const emailCheck = await query(`SELECT user_id FROM users WHERE email = "${email}" AND user_id != ${staff_id}`);
+        const emailCheck = await query(`SELECT user_id FROM users WHERE email = '${email}' AND user_id != ${staff_id}`);
         if (emailCheck.length > 0) {
             return res.status(400).json({ message: "This email is already in use by another account." });
         }
-        await query(`UPDATE users SET first_name="${first_name}", last_name="${last_name}", email="${email}", phone="${phone}", gender="${gender}", date_of_birth="${date_of_birth}" WHERE user_id=${staff_id} AND is_admin=1`);
+        await query(`UPDATE users SET first_name='${first_name}',last_name='${last_name}',email='${email}',phone='${phone}',gender='${gender}',date_of_birth='${date_of_birth}' WHERE user_id=${staff_id} AND is_admin=1`);
         return res.json({ message: "Staff member updated successfully." });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1146,33 +1599,58 @@ app.get("/api/admin/reports", async (req, res) => {
     let payments = [];
     try {
         if (filter === "all" || filter === "bookings") {
-            const rows = await query(`SELECT pb.payment_id, "booking" AS type, u.first_name, u.last_name,
-                       COALESCE(s.session_name, "Deleted Session") AS description,
-                       DATE_FORMAT(pb.created_at, '%Y-%m-%d %H:%i') AS paid_at, pb.amount_pence
+            const rows = await query(`SELECT pb.payment_id, 'booking' AS type, u.first_name, u.last_name,
+                       COALESCE(s.session_name, 'Deleted Session') AS description,
+                       strftime('%Y-%m-%d %H:%M', pb.created_at) AS paid_at, pb.amount_pence
                 FROM payment_bookings pb
                 JOIN users u ON pb.user_id = u.user_id
                 LEFT JOIN sessions s ON pb.session_id = s.session_id
-                WHERE pb.status = "paid" ORDER BY pb.created_at DESC
+                WHERE pb.status = 'paid' ORDER BY pb.created_at DESC
             `);
             payments = [...payments, ...rows];
         }
-        if (filter === "all" || filter === "memberships") {
-            const typeLabels = { day: "Day Pass", weekly: "Weekly Pass", monthly: "Monthly Pass" };
-            const rows = await query(`SELECT pm.payment_id, "membership" AS type, u.first_name, u.last_name,
+        if (filter === "all" || filter === "tickets") {
+            const typeLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
+            const passRows = await query(`SELECT pm.payment_id, 'ticket' AS type, u.first_name, u.last_name,
                        pm.membership_type AS description,
-                       DATE_FORMAT(pm.created_at, '%Y-%m-%d %H:%i') AS paid_at, pm.amount_pence
+                       strftime('%Y-%m-%d %H:%M', pm.created_at) AS paid_at, pm.amount_pence
                 FROM payment_memberships pm
                 JOIN users u ON pm.user_id = u.user_id
-                WHERE pm.status = "paid" ORDER BY pm.created_at DESC
+                WHERE pm.status = 'paid' ORDER BY pm.created_at DESC
             `);
-            payments = [...payments, ...rows.map(r => ({ ...r, description: typeLabels[r.description] 
-                || r.description }))];
+            payments = [...payments, ...passRows.map(r => ({ ...r, description: typeLabels[r.description] || r.description }))];
+        }
+        if (filter === "all" || filter === "memberships") {
+            const gymRows = await query(`SELECT pgm.payment_id, 'membership' AS type, u.first_name, u.last_name,
+                       CASE pgm.membership_type
+                           WHEN 'non_carded' THEN 'Non-Carded Membership'
+                           WHEN 'carded'     THEN 'Carded Membership'
+                           ELSE pgm.membership_type
+                       END AS description,
+                       strftime('%Y-%m-%d %H:%M', pgm.created_at) AS paid_at, pgm.amount_pence
+                FROM payment_gym_memberships pgm
+                JOIN users u ON pgm.user_id = u.user_id
+                WHERE pgm.status = 'paid' ORDER BY pgm.created_at DESC
+            `);
+            payments = [...payments, ...gymRows];
+
+            try {
+                const awardsRows = await query(`SELECT pba.payment_id, 'membership' AS type, u.first_name, u.last_name,
+                           'Boxing Awards Programme' AS description,
+                           strftime('%Y-%m-%d %H:%M', pba.created_at) AS paid_at, pba.amount_pence
+                    FROM payment_boxing_awards pba
+                    JOIN users u ON pba.user_id = u.user_id
+                    WHERE pba.status = 'paid' ORDER BY pba.created_at DESC
+                `);
+                payments = [...payments, ...awardsRows];
+            } catch (_) { /* table not yet created — skip */ }
         }
         payments.sort((a, b) => new Date(b.paid_at) - new Date(a.paid_at));
-        const total_revenue = payments.reduce((s, p) => s + p.amount_pence, 0);
-        const booking_revenue = payments.filter(p => p.type === "booking").reduce((s, p) => s + p.amount_pence, 0);
+        const total_revenue    = payments.reduce((s, p) => s + p.amount_pence, 0);
+        const booking_revenue  = payments.filter(p => p.type === "booking").reduce((s, p) => s + p.amount_pence, 0);
         const membership_revenue = payments.filter(p => p.type === "membership").reduce((s, p) => s + p.amount_pence, 0);
-        return res.json({ data: { total_revenue, booking_revenue, membership_revenue, payments}});
+        const ticket_revenue   = payments.filter(p => p.type === "ticket").reduce((s, p) => s + p.amount_pence, 0);
+        return res.json({ data: { total_revenue, booking_revenue, membership_revenue, ticket_revenue, payments}});
     } catch (error) {
         console.error(error);
         return res.status(500).json({ message: "SQL error" });
@@ -1180,3 +1658,6 @@ app.get("/api/admin/reports", async (req, res) => {
 });
 
 app.listen(8080, "0.0.0.0");
+
+
+
