@@ -282,6 +282,7 @@ function renderTimetable() {
                 card.querySelector(".btn-card-qr").addEventListener(    "click", (e) => { e.stopPropagation(); openSessionQRModal(session); });
                 card.querySelector(".btn-card-edit").addEventListener(   "click", (e) => { e.stopPropagation(); openSessionModal(session); });
                 card.querySelector(".btn-card-delete").addEventListener( "click", (e) => { e.stopPropagation(); openDeleteModal(session); });
+                card.addEventListener("click", () => openAttendanceModal(session));
 
                 sessionsContainer.appendChild(card);
             }
@@ -332,6 +333,93 @@ function printSessionQR(session, qrSrc) {
     win.document.close();
 }
 
+async function openAttendanceModal(session) {
+    const overlay = document.querySelector("#modal_attendance_overlay");
+    document.querySelector("#att_session_name").textContent = session.session_name;
+    document.querySelector("#att_session_meta").textContent =
+        session.start_date + "  ·  " + session.start_time.slice(0, 5) + "  ·  " + session.duration + " hr  ·  " + session.instructor;
+    document.querySelector("#att_summary").innerHTML = "";
+    document.querySelector("#att_list").innerHTML = "<p style='color:var(--muted);font-size:0.85rem;padding:8px 0;'>Loading...</p>";
+
+    overlay.classList.add("open");
+    document.querySelector("#att_btn_close").onclick = () => overlay.classList.remove("open");
+
+    try {
+        const req = await fetch("/api/admin/sessions/" + session.session_id + "/attendees");
+        if (!req.ok) {
+            document.querySelector("#att_list").innerHTML = "<p style='color:var(--danger);font-size:0.85rem;'>Failed to load attendees.</p>";
+            return;
+        }
+        renderAttendanceModal((await req.json()).data.attendees);
+    } catch (_) {
+        document.querySelector("#att_list").innerHTML = "<p style='color:var(--danger);font-size:0.85rem;'>Network error.</p>";
+    }
+}
+
+function renderAttendanceModal(attendees) {
+    const statusMeta = {
+        early:    { label: "Early",    bg: "#16A34A" },
+        on_time:  { label: "On Time",  bg: "#16A34A" },
+        late:     { label: "Late",     bg: "#D97706" },
+        missed:   { label: "Missed",   bg: "#D40404" },
+        upcoming: { label: "Upcoming", bg: "#6B7280" },
+    };
+
+    const badge = status => {
+        const m = statusMeta[status] || { label: status, bg: "#6B7280" };
+        return `<span style="display:inline-block;padding:2px 9px;background:${m.bg};color:#fff;font-size:0.7rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;">${m.label}</span>`;
+    };
+
+    const total    = attendees.length;
+    const attended = attendees.filter(a => ["early","on_time","late"].includes(a.status)).length;
+    const missed   = attendees.filter(a => a.status === "missed").length;
+
+    const chip = (label, val, color) =>
+        `<div style="padding:8px 16px;background:${color}18;border:1px solid ${color}40;min-width:80px;">` +
+            `<div style="font-size:1.3rem;font-weight:800;color:${color};">${val}</div>` +
+            `<div style="font-size:0.72rem;font-weight:600;color:var(--muted);margin-top:1px;">${label}</div>` +
+        `</div>`;
+
+    document.querySelector("#att_summary").innerHTML =
+        chip("Booked",   total,    "#0F71F0") +
+        chip("Attended", attended, "#16A34A") +
+        chip("Missed",   missed,   "#D40404");
+
+    if (total === 0) {
+        document.querySelector("#att_list").innerHTML =
+            "<p style='color:var(--muted);font-size:0.85rem;padding:12px 0;'>No bookings for this session yet.</p>";
+        return;
+    }
+
+    const fmtTime = dt => {
+        if (!dt) return "—";
+        const t = dt.split(" ")[1];
+        return t ? t.slice(0, 5) : "—";
+    };
+
+    document.querySelector("#att_list").innerHTML =
+        `<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+            <thead>
+                <tr style="border-bottom:2px solid var(--border);">
+                    <th style="text-align:left;padding:8px 10px;font-size:0.7rem;color:var(--muted);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Name</th>
+                    <th style="text-align:left;padding:8px 10px;font-size:0.7rem;color:var(--muted);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Contact</th>
+                    <th style="text-align:center;padding:8px 10px;font-size:0.7rem;color:var(--muted);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Status</th>
+                    <th style="text-align:center;padding:8px 10px;font-size:0.7rem;color:var(--muted);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Check-in</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${attendees.map(a =>
+                    `<tr style="border-bottom:1px solid var(--border);">
+                        <td style="padding:10px 10px;">${a.first_name} ${a.last_name}</td>
+                        <td style="padding:10px 10px;color:var(--muted);font-size:0.8rem;line-height:1.5;">${a.email}<br>${a.phone || ""}</td>
+                        <td style="padding:10px;text-align:center;">${badge(a.status)}</td>
+                        <td style="padding:10px;text-align:center;color:var(--muted);">${fmtTime(a.checkin_datetime)}</td>
+                    </tr>`
+                ).join("")}
+            </tbody>
+        </table>`;
+}
+
 // Opens the session form modal. If session is null the form is blank (add mode).
 // If session is an object, the fields are pre-filled with its values (edit mode).
 function openSessionModal(session) {
@@ -352,6 +440,8 @@ function openSessionModal(session) {
         document.querySelector("#form_membership").value = session.membership_eligibility || "Any";
         document.querySelector("#form_min_age").value = session.min_age;
         document.querySelector("#form_max_age").value = session.max_age;
+        document.querySelector("#form_session_type").value = session.session_type || "standard";
+        document.querySelector("#form_description").value = session.description || "";
     } else {
         // Add mode — clear the form and reset the editing ID
         editingSessionId = null;
@@ -366,6 +456,8 @@ function openSessionModal(session) {
         document.querySelector("#form_membership").value = "Any";
         document.querySelector("#form_min_age").value = "";
         document.querySelector("#form_max_age").value = "";
+        document.querySelector("#form_session_type").value = "standard";
+        document.querySelector("#form_description").value = "";
     }
 
     document.querySelector("#modal_session_overlay").classList.add("open");
@@ -376,9 +468,38 @@ function openSessionModal(session) {
     };
 }
 
+function setAgePreset(min, max) {
+    document.querySelector("#form_min_age").value = min;
+    document.querySelector("#form_max_age").value = max;
+}
+
+// Auto-fill age range when session type changes to minnow
+document.querySelector("#form_session_type").addEventListener("change", () => {
+    if (document.querySelector("#form_session_type").value === "minnow") {
+        setAgePreset(4, 9);
+    }
+});
+
 // Reads the session form, then sends either a POST (new) or PUT (edit) to the server.
 // Closes the modal on success or shows an error message on failure.
 async function saveSession() {
+    const minAgeStr = document.querySelector("#form_min_age").value.trim();
+    const maxAgeStr = document.querySelector("#form_max_age").value.trim();
+    if (!maxAgeStr) {
+        document.querySelector("#form_error_msg").textContent = "Please set the age range using the preset buttons above, or enter values manually.";
+        return;
+    }
+    const min_age = Number(minAgeStr);
+    const max_age = Number(maxAgeStr);
+    if (max_age <= 0) {
+        document.querySelector("#form_error_msg").textContent = "Max age must be greater than 0. Use the preset buttons to set the age group.";
+        return;
+    }
+    if (min_age > max_age) {
+        document.querySelector("#form_error_msg").textContent = "Min age cannot be greater than max age.";
+        return;
+    }
+
     const payload = {
         session_name: document.querySelector("#form_session_name").value,
         start_date: document.querySelector("#form_start_date").value,
@@ -388,8 +509,10 @@ async function saveSession() {
         capacity: Number(document.querySelector("#form_capacity").value),
         gender_eligibility: document.querySelector("#form_gender").value,
         membership_eligibility: document.querySelector("#form_membership").value,
-        min_age: Number(document.querySelector("#form_min_age").value),
-        max_age: Number(document.querySelector("#form_max_age").value)
+        min_age,
+        max_age,
+        session_type: document.querySelector("#form_session_type").value,
+        description: document.querySelector("#form_description").value
     };
 
     let req;

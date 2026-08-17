@@ -541,10 +541,13 @@
         .gym-mem-option-price { font-size: 1rem; font-weight: 800; color: var(--primary); }
         .gym-mem-option-desc  { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
 
-        #mem_purchase_section { max-width: 400px; }
-        #mem_purchase_section h3 { margin-bottom: 16px; }
+        #mem_purchase_section,
+        #carded_purchase_section { max-width: 400px; }
+        #mem_purchase_section h3,
+        #carded_purchase_section h3 { margin-bottom: 16px; }
 
-        #mem_purchase_section label {
+        #mem_purchase_section label,
+        #carded_purchase_section label {
             display: block;
             font-size: 0.7rem;
             font-weight: 700;
@@ -556,7 +559,9 @@
         }
 
         #mem_purchase_section select,
-        #mem_purchase_section input[type="date"] {
+        #mem_purchase_section input[type="date"],
+        #carded_purchase_section select,
+        #carded_purchase_section input[type="date"] {
             width: 100%;
             padding: 9px 12px;
             border: 1px solid var(--border);
@@ -567,7 +572,9 @@
         }
 
         #mem_purchase_section select:focus,
-        #mem_purchase_section input:focus { outline: none; border-color: var(--primary); }
+        #mem_purchase_section input:focus,
+        #carded_purchase_section select:focus,
+        #carded_purchase_section input:focus { outline: none; border-color: var(--primary); }
 
         .error-msg { color: var(--danger); font-size: 0.82rem; margin-top: 8px; min-height: 1rem; }
 
@@ -713,7 +720,7 @@
             .booking-actions button { flex: 1; min-height: 40px; }
 
             /* Membership */
-            .membership-card, #mem_purchase_section { max-width: 100%; }
+            .membership-card, #mem_purchase_section, #carded_purchase_section { max-width: 100%; }
             .gym-mem-options { flex-direction: column; }
             .gym-mem-option  { min-width: unset; width: 100%; }
 
@@ -852,17 +859,26 @@
                     <span id="gym_mem_end_date">—</span>
                 </div>
                 <div class="mem-detail-row">
-                    <span class="mem-label">Boxing Awards</span>
-                    <span id="gym_mem_awards_status">—</span>
+                    <span class="mem-label">Non-Contact Awards (1–3)</span>
+                    <span id="gym_mem_nc_awards_status">—</span>
+                </div>
+                <div class="mem-detail-row">
+                    <span class="mem-label">Contact Awards (4–6)</span>
+                    <span id="gym_mem_c_awards_status">—</span>
                 </div>
                 <button id="btn_gym_mem_qr" class="btn-ghost" style="margin-top:12px;">View Membership QR</button>
             </div>
         </div>
 
-        <!-- Shown when user has an active membership but has not yet purchased the awards programme -->
+        <!-- Shown when user has an active membership but has not yet purchased all awards -->
         <div id="gym_awards_purchase_section" style="display:none;">
-            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:12px;">You can add the Boxing Awards Programme to your existing membership.</p>
-            <button id="btn_buy_awards_standalone" class="btn-primary">Purchase Boxing Awards Programme — <span id="price_awards_standalone_display">£20.00</span></button>
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:12px;">You can add Boxing Awards to your existing membership.</p>
+            <div id="gym_awards_nc_row" style="display:none;margin-bottom:10px;">
+                <button id="btn_buy_awards_nc" class="btn-primary">Purchase Non-Contact Awards (1–3) — <span id="price_awards_nc_display">£20.00</span></button>
+            </div>
+            <div id="gym_awards_c_row" style="display:none;">
+                <button id="btn_buy_awards_c" class="btn-primary">Purchase Contact Awards (4–6) — <span id="price_awards_c_display">£20.00</span></button>
+            </div>
             <p id="gym_awards_error_msg" class="error-msg"></p>
         </div>
 
@@ -918,6 +934,7 @@
             </div>
         </div>
 
+        <!-- Shown for non-carded members (day / weekly / monthly options) -->
         <div id="mem_purchase_section">
             <h3 style="margin-bottom:16px;">Purchase a Ticket</h3>
             <label for="mem_type_select">Ticket Type</label>
@@ -930,6 +947,18 @@
             <input type="date" id="mem_start_input">
             <button id="btn_purchase_membership" class="btn-primary" style="margin-top:10px;">Purchase</button>
             <p id="mem_error_msg" class="error-msg"></p>
+        </div>
+
+        <!-- Shown only for senior carded members (17+): monthly pass is the only option -->
+        <div id="carded_purchase_section" style="display:none;">
+            <h3 style="margin-bottom:8px;">Carded Monthly Pass</h3>
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:16px;">
+                Covers all eligible senior carded sessions during the paid month. Purchase a new pass each month to maintain access.
+            </p>
+            <label for="carded_start_input">Start Date</label>
+            <input type="date" id="carded_start_input">
+            <button id="btn_purchase_carded_pass" class="btn-primary" style="margin-top:10px;">Purchase Carded Monthly Pass — £40.00</button>
+            <p id="carded_pass_error_msg" class="error-msg"></p>
         </div>
 
         <div id="covered_sessions_section" style="display:none;">
@@ -1000,6 +1029,10 @@
                     <span class="info-label">Age Range</span>
                     <span class="info-value" id="modal_age"></span>
                 </div>
+            </div>
+
+            <div id="modal_description_row" style="display:none;margin:14px 0 0;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:0.875rem;color:var(--muted);line-height:1.5;">
+                <span id="modal_description"></span>
             </div>
 
             <div class="modal-price">

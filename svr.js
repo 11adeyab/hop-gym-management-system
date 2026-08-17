@@ -176,11 +176,41 @@ function initDb() {
         `);
     }
 
-    // Migrate: add membership_eligibility column to sessions if it doesn't exist yet
+    // Migrate: add columns to sessions if they don't exist yet
     const sessionCols = db.prepare("PRAGMA table_info(sessions)").all();
     if (!sessionCols.some(c => c.name === "membership_eligibility")) {
         db.exec("ALTER TABLE sessions ADD COLUMN membership_eligibility TEXT NOT NULL DEFAULT 'Any'");
     }
+    if (!sessionCols.some(c => c.name === "description")) {
+        db.exec("ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+    }
+    if (!sessionCols.some(c => c.name === "session_type")) {
+        db.exec("ALTER TABLE sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'standard'");
+    }
+
+    // Migrate: add has_contact_awards to gym_memberships
+    const gymMemCols = db.prepare("PRAGMA table_info(gym_memberships)").all();
+    if (!gymMemCols.some(c => c.name === "has_contact_awards")) {
+        db.exec("ALTER TABLE gym_memberships ADD COLUMN has_contact_awards INTEGER NOT NULL DEFAULT 0");
+    }
+
+    // Migrate: add award_type to payment_boxing_awards
+    const awardPayCols = db.prepare("PRAGMA table_info(payment_boxing_awards)").all();
+    if (!awardPayCols.some(c => c.name === "award_type")) {
+        db.exec("ALTER TABLE payment_boxing_awards ADD COLUMN award_type TEXT NOT NULL DEFAULT 'non_contact'");
+    }
+
+    // Seed new pricing keys (INSERT OR IGNORE so existing custom values are preserved)
+    db.exec(`
+        INSERT OR IGNORE INTO pricing (price_key, value_pence, label) VALUES
+            ('session_saturday',     500, 'Saturday Club Session'),
+            ('session_holiday_camp', 600, 'Holiday/Fitness Camp'),
+            ('awards_contact',      2000, 'Contact Boxing Awards (Awards 4-6)');
+        UPDATE pricing SET value_pence = 1800, label = 'Non-Contact Boxing Awards (with membership, 10% off)'
+            WHERE price_key = 'awards_with_membership' AND value_pence = 1000;
+        UPDATE pricing SET label = 'Non-Contact Boxing Awards (Awards 1-3, standalone)'
+            WHERE price_key = 'awards_standalone' AND label NOT LIKE '%Non-Contact%';
+    `);
 
     // Seed a default admin account if none exists yet
     const adminCount = db.prepare("SELECT COUNT(*) AS c FROM users WHERE is_admin = 1").get();
@@ -306,7 +336,9 @@ app.get("/api/register/prices", async (req, res) => {
         return res.json({
             membership_non_carded:  prices.membership_non_carded  || 1000,
             membership_carded:      prices.membership_carded      || 2500,
-            awards_with_membership: prices.awards_with_membership || 1000
+            awards_with_membership: prices.awards_with_membership || 1800,
+            awards_standalone:      prices.awards_standalone      || 2000,
+            awards_contact:         prices.awards_contact         || 2000
         });
     } catch (_) {
         return res.status(500).json({ message: "Pricing unavailable." });
@@ -543,7 +575,7 @@ app.get("/api/sessions", async (req, res) => {
         return res.redirect("/");
     }
     try {
-        const results = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, price_pence FROM sessions`);
+        const results = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, price_pence, session_type, description FROM sessions`);
         return res.json({ data: results });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -591,40 +623,57 @@ app.post("/api/bookings/checkout", async (req, res) => {
         if (overlaps.length > 0) {
             return res.status(400).json({ message: "You already have a booking that clashes with this session's time." });
         }
-        const memberships = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND '${start_date}' BETWEEN start_date AND end_date AND end_date >= date('now')`);
-        if (memberships.length > 0) {
-            return res.status(400).json({ message: "This session is already covered by your active membership. You have access to all sessions in this period — no individual booking is needed." });
-        }
-        const today_date = new Date();
-        const birth_date = new Date(dob);
-        let age = today_date.getFullYear() - birth_date.getFullYear();
-        const had_birthday = today_date.getMonth() > birth_date.getMonth() || (today_date.getMonth() === birth_date.getMonth() && today_date.getDate() >= birth_date.getDate());
-        if (!had_birthday) {
-            age--;
-        }
-        if (age < min_age || age > max_age){
-            return res.status(400).json({ message: `You are not eligible for this session. Age requirement: ${min_age}–${max_age} years (you are ${age}).` });
-        }
-        if (gender_eligibility !== "Any" && gender.toLowerCase() !== gender_eligibility.toLowerCase()) return res.status(400).json({ message: `This session is for ${gender_eligibility} only.` });
 
-        // Membership type eligibility — re-fetch from DB so client cannot spoof it
-        const sessionDetail = await query(`SELECT membership_eligibility, price_pence, capacity FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
-        if (sessionDetail.length === 0) return res.status(404).json({ message: "Session not found." });
-        if (sessionDetail[0].capacity <= 0) return res.status(400).json({ message: "This session can't be booked, there are no spaces left!" });
-        const memElig = sessionDetail.length > 0 ? (sessionDetail[0].membership_eligibility || "Any") : "Any";
+        // Fetch session details from DB — client values are not trusted for eligibility or price
+        const sessionRows = await query(`SELECT membership_eligibility, price_pence, capacity, session_type, min_age, max_age, gender_eligibility, start_date FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
+        if (sessionRows.length === 0) return res.status(404).json({ message: "Session not found." });
+        const sDetail = sessionRows[0];
+        if (sDetail.capacity <= 0) return res.status(400).json({ message: "This session can't be booked, there are no spaces left!" });
+
+        // Age check using DB bounds
+        const age = computeAge(dob);
+        if (age === null || age < sDetail.min_age || age > sDetail.max_age) {
+            return res.status(400).json({ message: `You are not eligible for this session. Age requirement: ${sDetail.min_age}–${sDetail.max_age} years${age !== null ? ` (you are ${age})` : ""}.` });
+        }
+
+        // Gender check
+        if (sDetail.gender_eligibility !== "Any" && gender.toLowerCase() !== sDetail.gender_eligibility.toLowerCase()) {
+            return res.status(400).json({ message: `This session is for ${sDetail.gender_eligibility} only.` });
+        }
+
+        const memElig = sDetail.membership_eligibility || "Any";
+
+        // Senior Carded (17+): monthly pass is required; booking is free if they hold one
+        if (memElig === "Carded" && age >= 17) {
+            const monthlyPass = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND membership_type = 'monthly' AND status = 'active' AND '${sDetail.start_date}' BETWEEN start_date AND end_date AND end_date >= date('now') LIMIT 1`);
+            if (monthlyPass.length === 0) {
+                return res.status(403).json({ message: "Senior Carded Boxers (17+) must hold an active monthly carded pass (£40/month) to book Carded sessions. Please purchase your monthly pass from the Tickets section first." });
+            }
+            // Pass covers this session — create booking at no charge and return immediately
+            await query(`INSERT INTO bookings (user_id, session_id) VALUES (${user_id}, ${session_id})`);
+            await query(`UPDATE sessions SET capacity = capacity - 1 WHERE session_id = ${session_id}`);
+            return res.json({ free: true });
+        }
+
+        // Gym membership type eligibility check
         if (memElig !== "Any") {
             const gymMem = await query(`SELECT membership_type FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY created_at DESC LIMIT 1`);
             const userMemType = gymMem.length > 0 ? gymMem[0].membership_type : null;
-            if (memElig === "Carded" && userMemType !== "carded") {
+            if (memElig === "Carded" && !["carded", "minnow_carded"].includes(userMemType)) {
                 return res.status(400).json({ message: "This session is for Carded Boxers only. You need an active Carded membership to book." });
             }
-            if (memElig === "Non-Carded" && userMemType !== "non_carded") {
+            if (memElig === "Non-Carded" && !["non_carded", "minnow_non_carded"].includes(userMemType)) {
                 return res.status(400).json({ message: "This session is for Non-Carded members only." });
             }
         }
 
-        const sessionRow = sessionDetail;
-        const bookingPrice = sessionRow.length > 0 ? sessionRow[0].price_pence : 300;
+        // General ticket pass check (any active pass covering the session date)
+        const ticketPasses = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND '${start_date}' BETWEEN start_date AND end_date AND end_date >= date('now') LIMIT 1`);
+        if (ticketPasses.length > 0) {
+            return res.status(400).json({ message: "This session is already covered by your active ticket pass. You have access to all sessions in this period — no individual booking is needed." });
+        }
+
+        const bookingPrice = sDetail.price_pence || 300;
         const baseUrl  = req.protocol + "://" + req.get("host");
         const stripeSession = await stripe.checkout.sessions.create({
             payment_method_types: ["card"],
@@ -781,7 +830,22 @@ app.get("/api/membership", async (req, res) => {
         // Exclude sessions that have already passed, sessions already booked, and sessions the user is ineligible for
         const userAge    = computeAge(req.session.user.dob) ?? 0;
         const userGender = req.session.user.gender || 'Any';
-        const sessions = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity FROM sessions WHERE start_date BETWEEN '${membership.start_date}' AND '${membership.end_date}' AND start_date >= '${today_str}' AND session_id NOT IN (SELECT session_id FROM bookings WHERE user_id = ${user_id}) AND (gender_eligibility = 'Any' OR gender_eligibility = '${userGender}') AND min_age <= ${userAge} AND max_age >= ${userAge} ORDER BY start_date, start_time`);
+
+        // Determine which membership_eligibility values this user's gym membership allows
+        await query(`UPDATE gym_memberships SET status = 'expired' WHERE end_date < date('now') AND status = 'active'`);
+        const gymMemRows = await query(`SELECT membership_type FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY created_at DESC LIMIT 1`);
+        const gymMemType = gymMemRows.length > 0 ? gymMemRows[0].membership_type : null;
+
+        let memEligFilter;
+        if (gymMemType === 'carded' || gymMemType === 'minnow_carded') {
+            memEligFilter = "membership_eligibility IN ('Carded', 'Any')";
+        } else if (gymMemType === 'non_carded' || gymMemType === 'minnow_non_carded') {
+            memEligFilter = "membership_eligibility IN ('Non-Carded', 'Any')";
+        } else {
+            memEligFilter = "membership_eligibility = 'Any'";
+        }
+
+        const sessions = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity FROM sessions WHERE start_date BETWEEN '${membership.start_date}' AND '${membership.end_date}' AND start_date >= '${today_str}' AND session_id NOT IN (SELECT session_id FROM bookings WHERE user_id = ${user_id}) AND (gender_eligibility = 'Any' OR gender_eligibility = '${userGender}') AND min_age <= ${userAge} AND max_age >= ${userAge} AND ${memEligFilter} ORDER BY start_date, start_time`);
 
         return res.json({
             data: {
@@ -809,7 +873,7 @@ app.post("/api/membership/checkout", async (req, res) => {
     if (!membership_type || !start_date) {
         return res.status(400).json({ message: "Membership type and start date are required." });
     }
-    
+
     if (!["day", "weekly", "monthly"].includes(membership_type)) {
         return res.status(400).json({ message: "Invalid membership type." });
     }
@@ -818,6 +882,17 @@ app.post("/api/membership/checkout", async (req, res) => {
         return res.status(400).json({ message: "Start date cannot be in the past." });
     }
     try {
+        // Senior carded members (17+) may only purchase the monthly pass.
+        // Day and weekly passes are not available to this group.
+        const gymMem = await query(`SELECT membership_type FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY created_at DESC LIMIT 1`);
+        const gymMemType = gymMem.length > 0 ? gymMem[0].membership_type : null;
+        const userAge = computeAge(req.session.user.dob);
+        if (gymMemType === 'carded' && userAge !== null && userAge >= 17) {
+            if (membership_type !== 'monthly') {
+                return res.status(403).json({ message: "Carded members (17+) may only purchase the monthly carded pass (£40/month). Day and weekly passes are not available to this group." });
+            }
+        }
+
         const existing = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now')`);
         if (existing.length > 0) {
             return res.status(400).json({ message: "You already have an active membership." });
@@ -1063,7 +1138,7 @@ app.get("/api/gym-membership", async (req, res) => {
     const user_id = req.session.user.user_id;
     try {
         await query(`UPDATE gym_memberships SET status = 'expired' WHERE end_date < date('now') AND status = 'active'`);
-        const rows = await query(`SELECT gym_membership_id, membership_type, start_date, end_date, status, has_boxing_awards, qr_code FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
+        const rows = await query(`SELECT gym_membership_id, membership_type, start_date, end_date, status, has_boxing_awards, has_contact_awards, qr_code FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
         return res.json({ data: rows.length > 0 ? rows[0] : null });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1227,17 +1302,30 @@ app.get("/gym-membership/success", async (req, res) => {
 app.post("/api/boxing-awards/checkout", async (req, res) => {
     if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
     const user_id = req.session.user.user_id;
+    const award_type = req.body && req.body.award_type;
+    if (!["non_contact", "contact"].includes(award_type)) {
+        return res.status(400).json({ message: "Invalid award type. Must be non_contact or contact." });
+    }
     try {
         await query(`UPDATE gym_memberships SET status = 'expired' WHERE end_date < date('now') AND status = 'active'`);
-        const memberships = await query(`SELECT gym_membership_id, has_boxing_awards FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
+        const memberships = await query(`SELECT gym_membership_id, has_boxing_awards, has_contact_awards FROM gym_memberships WHERE user_id = ${user_id} AND status = 'active' AND end_date >= date('now') ORDER BY end_date DESC LIMIT 1`);
         if (memberships.length === 0)
-            return res.status(400).json({ message: "You need an active gym membership to purchase the Boxing Awards Programme." });
-        if (memberships[0].has_boxing_awards)
-            return res.status(400).json({ message: "You already have the Boxing Awards Programme." });
+            return res.status(400).json({ message: "You need an active gym membership to purchase Boxing Awards." });
+
+        const gymMem = memberships[0];
+        if (award_type === "non_contact" && gymMem.has_boxing_awards)
+            return res.status(400).json({ message: "You already have the Non-Contact Boxing Awards (Awards 1–3)." });
+        if (award_type === "contact" && gymMem.has_contact_awards)
+            return res.status(400).json({ message: "You already have the Contact Boxing Awards (Awards 4–6)." });
 
         const prices = await getPrices();
-        const amount = prices["awards_standalone"];
+        const priceKey = award_type === "non_contact" ? "awards_standalone" : "awards_contact";
+        const amount = prices[priceKey];
         if (!amount) return res.status(500).json({ message: "Pricing not configured. Contact an administrator." });
+
+        const productName = award_type === "non_contact"
+            ? "HOP Boxing Academy — Non-Contact Boxing Awards (Awards 1–3)"
+            : "HOP Boxing Academy — Contact Boxing Awards (Awards 4–6)";
 
         const baseUrl = req.protocol + "://" + req.get("host");
         const stripeSession = await stripe.checkout.sessions.create({
@@ -1245,7 +1333,7 @@ app.post("/api/boxing-awards/checkout", async (req, res) => {
             line_items: [{
                 price_data: {
                     currency: "gbp",
-                    product_data: { name: "HOP Boxing Academy — Boxing Awards Programme" },
+                    product_data: { name: productName },
                     unit_amount: amount
                 },
                 quantity: 1
@@ -1255,7 +1343,7 @@ app.post("/api/boxing-awards/checkout", async (req, res) => {
             cancel_url:  baseUrl + "/dashboard"
         });
 
-        await query(`INSERT INTO payment_boxing_awards (user_id, gym_membership_id, stripe_session_id, amount_pence, status) VALUES (${user_id}, ${memberships[0].gym_membership_id}, '${stripeSession.id}',${amount}, 'pending')`);
+        await query(`INSERT INTO payment_boxing_awards (user_id, gym_membership_id, stripe_session_id, amount_pence, status, award_type) VALUES (${user_id}, ${gymMem.gym_membership_id}, '${stripeSession.id}',${amount}, 'pending', '${award_type}')`);
         return res.json({ url: stripeSession.url });
     } catch (error) {
         console.error(error);
@@ -1276,7 +1364,9 @@ app.get("/boxing-awards/success", async (req, res) => {
         const stripeSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
         if (stripeSession.payment_status !== 'paid') return res.redirect("/dashboard");
 
-        await query(`UPDATE gym_memberships SET has_boxing_awards = 1 WHERE gym_membership_id = ${payment.gym_membership_id}`);
+        const awardType = payment.award_type || "non_contact";
+        const colToSet = awardType === "contact" ? "has_contact_awards" : "has_boxing_awards";
+        await query(`UPDATE gym_memberships SET ${colToSet} = 1 WHERE gym_membership_id = ${payment.gym_membership_id}`);
         await query(`UPDATE payment_boxing_awards SET status = 'paid' WHERE payment_id = ${payment.payment_id}`);
         return res.redirect("/dashboard");
     } catch (error) {
@@ -1293,8 +1383,49 @@ app.get("/api/admin/sessions", async (req, res) => {
         return res.status(403).json({ message: "Access denied" });
     }
     try {
-        const results = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, min_age, max_age, qr_code, price_pence FROM sessions ORDER BY start_date ASC, start_time ASC`);
+        const results = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, qr_code, price_pence, session_type, description FROM sessions ORDER BY start_date ASC, start_time ASC`);
         return res.json({ data: results });
+    } catch (error) {
+        return res.status(500).json({ message: "SQL error" });
+    }
+});
+
+app.get("/api/admin/sessions/:id/attendees", async (req, res) => {
+    if (!req.session.user || !req.session.user.is_admin) return res.status(403).json({ message: "Access denied" });
+    const session_id = Number(req.params.id);
+    if (!session_id) return res.status(400).json({ message: "Invalid session ID" });
+    try {
+        const sessions = await query(`SELECT session_id, session_name, start_date, start_time, duration, instructor FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
+        if (sessions.length === 0) return res.status(404).json({ message: "Session not found" });
+        const session = sessions[0];
+
+        const attendees = await query(`
+            SELECT b.booking_id, u.user_id, u.first_name, u.last_name, u.email, u.phone, a.checkin_datetime
+            FROM bookings b
+            JOIN users u ON b.user_id = u.user_id
+            LEFT JOIN attendance a ON a.booking_id = b.booking_id
+            WHERE b.session_id = ${session_id}
+            ORDER BY u.last_name, u.first_name
+        `);
+
+        const sessionStart = new Date(`${session.start_date}T${session.start_time}`);
+        const isPast = new Date() >= sessionStart;
+
+        const result = attendees.map(a => {
+            let status;
+            if (!a.checkin_datetime) {
+                status = isPast ? "missed" : "upcoming";
+            } else {
+                const checkin  = new Date(a.checkin_datetime.replace(" ", "T"));
+                const diffMins = (checkin - sessionStart) / 60000;
+                if (diffMins < 0)       status = "early";
+                else if (diffMins <= 10) status = "on_time";
+                else                     status = "late";
+            }
+            return { ...a, status };
+        });
+
+        return res.json({ data: { session, attendees: result } });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
     }
@@ -1314,7 +1445,7 @@ app.get("/api/admin/sessions/:id/qr", async (req, res) => {
 
 function validateSessionFields(body, today) {
     const { session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility,
-        membership_eligibility, min_age, max_age } = body;
+        membership_eligibility, min_age, max_age, session_type } = body;
     if (!session_name || String(session_name).trim() === "") {
         return "Session name is required.";
     }
@@ -1348,6 +1479,9 @@ function validateSessionFields(body, today) {
     if (!Number.isInteger(max_age) || max_age < min_age) {
         return "Max age must be a whole number ≥ min age.";
     }
+    if (!["standard","saturday","holiday_camp","minnow"].includes(session_type)) {
+        return "Session type must be standard, saturday, holiday_camp, or minnow.";
+    }
     return null;
 }
 
@@ -1355,17 +1489,23 @@ app.post("/api/admin/sessions", async (req, res) => {
     if (!req.session.user || !req.session.user.is_admin) {
         return res.status(403).json({ message: "Access denied" });
     }
-    const { session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age } = req.body;
+    const { session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, session_type, description } = req.body;
     const today = toLocalDateStr(new Date());
     const err = validateSessionFields(req.body, today);
     if (err) return res.status(400).json({ message: err });
     try {
-        const prices     = await getPrices();
-        const price_pence = max_age < 10
-            ? (prices.session_minnows || 300)
-            : (prices.session_standard || 400);
+        const prices = await getPrices();
+        const priceMap = {
+            minnow:       prices.session_minnows      || 300,
+            standard:     prices.session_standard     || 400,
+            saturday:     prices.session_saturday     || 500,
+            holiday_camp: prices.session_holiday_camp || 600,
+        };
+        const effective_type = (session_type === "minnow" || max_age < 10) ? "minnow" : session_type;
+        const price_pence = priceMap[effective_type] || priceMap.standard;
         const sessionQR = crypto.randomUUID();
-        await query(`INSERT INTO sessions (session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, qr_code, price_pence) VALUES ('${session_name}','${start_date}','${start_time}:00', ${duration}, '${instructor}',${capacity}, '${gender_eligibility}','${membership_eligibility}',${min_age}, ${max_age}, '${sessionQR}',${price_pence})`);
+        const safeDesc = String(description || "").replace(/'/g, "''");
+        await query(`INSERT INTO sessions (session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, qr_code, price_pence, session_type, description) VALUES ('${session_name}','${start_date}','${start_time}:00', ${duration}, '${instructor}',${capacity}, '${gender_eligibility}','${membership_eligibility}',${min_age}, ${max_age}, '${sessionQR}',${price_pence}, '${effective_type}', '${safeDesc}')`);
         return res.json({ message: "Session created successfully" });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1376,7 +1516,7 @@ app.put("/api/admin/sessions", async (req, res) => {
     if (!req.session.user || !req.session.user.is_admin) {
         return res.status(403).json({ message: "Access denied" });
     }
-    const { session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age } = req.body;
+    const { session_id, session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, session_type, description } = req.body;
     if (!session_id) return res.status(400).json({ message: "Session ID is required." });
     try {
         const existing = await query(`SELECT start_date FROM sessions WHERE session_id = ${session_id}`);
@@ -1385,11 +1525,17 @@ app.put("/api/admin/sessions", async (req, res) => {
         if (existing[0].start_date < today) return res.status(400).json({ message: "Cannot edit a session that is in the past." });
         const err = validateSessionFields(req.body, today);
         if (err) return res.status(400).json({ message: err });
-        const prices      = await getPrices();
-        const price_pence = max_age < 10
-            ? (prices.session_minnows || 300)
-            : (prices.session_standard || 400);
-        await query(`UPDATE sessions SET session_name='${session_name}',start_date='${start_date}',start_time='${start_time}:00', duration=${duration}, instructor='${instructor}',capacity=${capacity}, gender_eligibility='${gender_eligibility}',membership_eligibility='${membership_eligibility}',min_age=${min_age}, max_age=${max_age}, price_pence=${price_pence} WHERE session_id=${session_id}`);
+        const prices = await getPrices();
+        const priceMap = {
+            minnow:       prices.session_minnows      || 300,
+            standard:     prices.session_standard     || 400,
+            saturday:     prices.session_saturday     || 500,
+            holiday_camp: prices.session_holiday_camp || 600,
+        };
+        const effective_type = (session_type === "minnow" || max_age < 10) ? "minnow" : session_type;
+        const price_pence = priceMap[effective_type] || priceMap.standard;
+        const safeDesc = String(description || "").replace(/'/g, "''");
+        await query(`UPDATE sessions SET session_name='${session_name}',start_date='${start_date}',start_time='${start_time}:00', duration=${duration}, instructor='${instructor}',capacity=${capacity}, gender_eligibility='${gender_eligibility}',membership_eligibility='${membership_eligibility}',min_age=${min_age}, max_age=${max_age}, price_pence=${price_pence}, session_type='${effective_type}', description='${safeDesc}' WHERE session_id=${session_id}`);
         return res.json({ message: "Session updated successfully" });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1448,7 +1594,7 @@ app.get("/api/admin/customers/:id", async (req, res) => {
         if (users.length === 0) {
             return res.status(404).json({ message: "Customer not found" });
         }
-        const memberships = await query(`SELECT gym_membership_id AS membership_id, membership_type, start_date, end_date, status, has_boxing_awards FROM gym_memberships WHERE user_id = ${customer_id} ORDER BY end_date DESC LIMIT 1`);
+        const memberships = await query(`SELECT gym_membership_id AS membership_id, membership_type, start_date, end_date, status, has_boxing_awards, has_contact_awards FROM gym_memberships WHERE user_id = ${customer_id} ORDER BY end_date DESC LIMIT 1`);
         const bookings = await query(`SELECT b.booking_id, s.session_name, s.start_date, s.start_time, s.duration, a.checkin_datetime FROM bookings b LEFT JOIN sessions s ON b.session_id = s.session_id LEFT JOIN attendance a ON b.booking_id = a.booking_id WHERE b.user_id = ${customer_id} ORDER BY s.start_date DESC, s.start_time DESC`);
         return res.json({ data: { user: users[0], membership: memberships.length > 0 ? memberships[0] : null, bookings } });
     } catch (error) {

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const Database = require\\('better-sqlite3'\\); const db = new Database\\('booking.db'\\); const rows = db.prepare\\('SELECT session_id, session_name, membership_eligibility, session_type, min_age, max_age, start_date FROM sessions ORDER BY start_date, session_name'\\).all\\(\\); console.log\\(JSON.stringify\\(rows, null, 2\\)\\); db.close\\(\\);\")",
+      "Bash(node -e \"const Database = require\\('better-sqlite3'\\); const db = new Database\\('database.db'\\); const rows = db.prepare\\('SELECT session_id, session_name, membership_eligibility, session_type, min_age, max_age, start_date FROM sessions ORDER BY session_name, start_date'\\).all\\(\\); console.log\\(JSON.stringify\\(rows, null, 2\\)\\); db.close\\(\\);\")",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

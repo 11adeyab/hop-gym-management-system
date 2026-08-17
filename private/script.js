@@ -5,6 +5,11 @@ let weekOffset     = 0;
 let activeFilter   = "upcoming";
 let checkinScanner = null;
 
+// Prefetched at page load — used to determine pass coverage in the booking modal
+let pageGymData  = null;
+let pagePassData = null;
+let pageUserDob  = null;
+
 
 // Hamburger menu toggle (mobile)
 document.querySelector("#hamburger_btn").addEventListener("click", () => {
@@ -25,14 +30,21 @@ for (const link of document.querySelectorAll("nav a")) {
     });
 }
 
-// Load the logged-in user's name into the sidebar header once on page load
+// Load user name into sidebar and prefetch gym/pass data for booking modal awareness
 (async () => {
-    const req = await fetch("/api/user");
-    if (req.ok) {
-        const res = await req.json();
-        const u = res.data;
+    const [userReq, gymReq, passReq] = await Promise.all([
+        fetch("/api/user"),
+        fetch("/api/gym-membership"),
+        fetch("/api/membership")
+    ]);
+    if (userReq.ok) {
+        const res = await userReq.json();
+        const u   = res.data;
         document.querySelector("#sidebar_user_name").textContent = u.first_name + " " + u.last_name;
+        pageUserDob = u.dob || null;
     }
+    if (gymReq.ok)  { const r = await gymReq.json();  pageGymData  = r.data || null; }
+    if (passReq.ok) { const r = await passReq.json();  pagePassData = (r.data && r.data.membership_type) ? r.data : null; }
 })();
 
 document.querySelector("#nav_overview").addEventListener("click",        () => showView("overview"));
@@ -276,6 +288,15 @@ function renderTimetable() {
     }
 }
 
+function isCoveredByMonthlyPass(session) {
+    return !!(
+        session.membership_eligibility === "Carded" &&
+        pageGymData && pageGymData.membership_type === "carded" &&
+        pageUserDob && calcAge(pageUserDob) >= 17 &&
+        pagePassData && pagePassData.membership_type === "monthly"
+    );
+}
+
 function openModal(session) {
     document.querySelector("#error_msg").textContent = "";
     document.querySelector("#modal_session_name").textContent = session.session_name;
@@ -291,7 +312,18 @@ function openModal(session) {
         memEligLabel === "Carded" ? "Carded Boxers only" : "Non-Carded only";
     document.querySelector("#modal_age").textContent = session.min_age + " to " + session.max_age + " years";
 
-    const priceLabel = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—";
+    const descRow = document.querySelector("#modal_description_row");
+    const descEl  = document.querySelector("#modal_description");
+    if (session.description && session.description.trim()) {
+        descEl.textContent = session.description.trim();
+        descRow.style.display = "";
+    } else {
+        descRow.style.display = "none";
+    }
+
+    const covered    = isCoveredByMonthlyPass(session);
+    const priceLabel = covered ? "Covered by monthly pass" :
+        (session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—");
     document.querySelector("#modal_price_display").textContent = priceLabel;
     document.querySelector("#modal_btn_book").textContent = "Book — " + priceLabel;
 
@@ -302,12 +334,12 @@ function openModal(session) {
         document.querySelector("#modal_overlay").classList.remove("open");
     };
 }
-// Validates the booking on the server, then redirects the user to Stripe to pay.
-// The booking is only created in the database after payment is confirmed.
 async function bookSession(session) {
     document.querySelector("#error_msg").textContent = "";
-    const priceLabel = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—";
-    document.querySelector("#modal_btn_book").textContent = "Redirecting to payment...";
+    const covered    = isCoveredByMonthlyPass(session);
+    const priceLabel = covered ? "Covered by monthly pass" :
+        (session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—");
+    document.querySelector("#modal_btn_book").textContent = covered ? "Booking..." : "Redirecting to payment...";
     document.querySelector("#modal_btn_book").disabled = true;
 
     try {
@@ -319,6 +351,17 @@ async function bookSession(session) {
 
         if (req.ok) {
             const data = await req.json();
+            if (data.free) {
+                // Booking confirmed via monthly pass — close the modal and refresh the timetable in place
+                document.querySelector("#modal_overlay").classList.remove("open");
+                const refreshReq = await fetch("/api/sessions");
+                if (refreshReq.ok) {
+                    const refreshData = await refreshReq.json();
+                    allSessions = refreshData.data;
+                    renderTimetable();
+                }
+                return;
+            }
             window.location.href = data.url;
         } else {
             const fail = await req.json();
@@ -524,9 +567,11 @@ async function loadGymMembership() {
 }
 
 async function loadSessionPasses() {
-    const [passReq, pricingReq] = await Promise.all([
+    const [passReq, pricingReq, gymReq, userReq] = await Promise.all([
         fetch("/api/membership"),
-        fetch("/api/pricing")
+        fetch("/api/pricing"),
+        fetch("/api/gym-membership"),
+        fetch("/api/user")
     ]);
 
     const prices = {};
@@ -536,7 +581,9 @@ async function loadSessionPasses() {
     }
 
     const passData = passReq.ok ? (await passReq.json()).data : null;
-    renderSessionPass(passData, prices);
+    const gymData  = gymReq.ok  ? (await gymReq.json()).data   : null;
+    const userData = userReq.ok ? (await userReq.json()).data  : null;
+    renderSessionPass(passData, prices, gymData, userData);
 }
 
 function renderGymMembership(membership, prices, user) {
@@ -556,18 +603,38 @@ function renderGymMembership(membership, prices, user) {
 
         document.querySelector("#gym_mem_type").textContent     = typeLabels[membership.membership_type] || membership.membership_type;
         document.querySelector("#gym_mem_end_date").textContent = membership.end_date;
-        document.querySelector("#gym_mem_awards_status").textContent = membership.has_boxing_awards ? "Active" : "Not purchased";
+        document.querySelector("#gym_mem_nc_awards_status").textContent = membership.has_boxing_awards  ? "Active" : "Not purchased";
+        document.querySelector("#gym_mem_c_awards_status").textContent  = membership.has_contact_awards ? "Active" : "Not purchased";
 
         document.querySelector("#btn_gym_mem_qr").onclick = () => openGymMemQRModal(membership);
 
         const isMinnow = ["minnow_carded", "minnow_non_carded"].includes(membership.membership_type);
-        if (membership.has_boxing_awards || isMinnow) {
+        const needsNonContact = !isMinnow && !membership.has_boxing_awards;
+        const needsContact    = !isMinnow && !membership.has_contact_awards;
+
+        if (!needsNonContact && !needsContact) {
             awardsPurchSec.style.display = "none";
         } else {
             awardsPurchSec.style.display = "block";
-            const standalonePrice = prices.awards_standalone;
-            document.querySelector("#price_awards_standalone_display").textContent = fmt(standalonePrice);
-            document.querySelector("#btn_buy_awards_standalone").onclick = () => purchaseBoxingAwards();
+
+            const ncRow = document.querySelector("#gym_awards_nc_row");
+            const cRow  = document.querySelector("#gym_awards_c_row");
+
+            if (needsNonContact) {
+                ncRow.style.display = "block";
+                document.querySelector("#price_awards_nc_display").textContent = fmt(prices.awards_standalone);
+                document.querySelector("#btn_buy_awards_nc").onclick = () => purchaseBoxingAwards("non_contact");
+            } else {
+                ncRow.style.display = "none";
+            }
+
+            if (needsContact) {
+                cRow.style.display = "block";
+                document.querySelector("#price_awards_c_display").textContent = fmt(prices.awards_contact);
+                document.querySelector("#btn_buy_awards_c").onclick = () => purchaseBoxingAwards("contact");
+            } else {
+                cRow.style.display = "none";
+            }
         }
     } else {
         badge.textContent = "No Active Membership";
@@ -646,16 +713,19 @@ async function purchaseGymMembership(type, prices) {
 }
 
 
-async function purchaseBoxingAwards() {
+async function purchaseBoxingAwards(award_type) {
     document.querySelector("#gym_awards_error_msg").textContent = "";
-    const btn = document.querySelector("#btn_buy_awards_standalone");
-    const priceText = btn.querySelector("span").textContent;
+    const btnId = award_type === "contact" ? "#btn_buy_awards_c" : "#btn_buy_awards_nc";
+    const btn = document.querySelector(btnId);
+    const priceSpanId = award_type === "contact" ? "#price_awards_c_display" : "#price_awards_nc_display";
+    const priceText = document.querySelector(priceSpanId).textContent;
     btn.disabled = true;
     btn.textContent = "Redirecting to payment...";
 
     const req = await fetch("/api/boxing-awards/checkout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ award_type })
     });
 
     if (req.ok) {
@@ -664,20 +734,29 @@ async function purchaseBoxingAwards() {
         const fail = await req.json();
         document.querySelector("#gym_awards_error_msg").textContent = fail.message;
         btn.disabled = false;
-        btn.innerHTML = "Purchase Boxing Awards Programme — <span id='price_awards_standalone_display'>" + priceText + "</span>";
+        const label = award_type === "contact" ? "Purchase Contact Awards (4–6) — " : "Purchase Non-Contact Awards (1–3) — ";
+        btn.innerHTML = label + "<span id='" + priceSpanId.slice(1) + "'>" + priceText + "</span>";
     }
 }
 
-function renderSessionPass(membership, prices) {
-    const typeLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
+function renderSessionPass(membership, prices, gymData, userData) {
+    const userAge = userData ? calcAge(userData.dob) : null;
+    const isCardedSenior = !!(gymData && gymData.membership_type === "carded" && userAge !== null && userAge >= 17);
+
+    const typeLabels = {
+        day:     "Day Ticket",
+        weekly:  "Weekly Ticket",
+        monthly: isCardedSenior ? "Carded Monthly Pass" : "Monthly Ticket"
+    };
 
     if (membership) {
         const badge = document.querySelector("#mem_status_badge");
         badge.textContent = "Active";
         badge.className   = "mem-status-badge mem-status-active";
 
-        document.querySelector("#pass_details").style.display        = "block";
-        document.querySelector("#mem_purchase_section").style.display = "none";
+        document.querySelector("#pass_details").style.display           = "block";
+        document.querySelector("#mem_purchase_section").style.display    = "none";
+        document.querySelector("#carded_purchase_section").style.display = "none";
         document.querySelector("#mem_type").textContent       = typeLabels[membership.membership_type] || membership.membership_type;
         document.querySelector("#mem_start_date").textContent = membership.start_date;
         document.querySelector("#mem_end_date").textContent   = membership.end_date;
@@ -702,31 +781,78 @@ function renderSessionPass(membership, prices) {
             }
         }
     } else {
-        document.querySelector("#mem_status_badge").textContent  = "No Active Pass";
-        document.querySelector("#mem_status_badge").className    = "mem-status-badge mem-status-inactive";
-        document.querySelector("#pass_details").style.display    = "none";
-        document.querySelector("#mem_purchase_section").style.display = "block";
+        document.querySelector("#mem_status_badge").textContent           = "No Active Pass";
+        document.querySelector("#mem_status_badge").className             = "mem-status-badge mem-status-inactive";
+        document.querySelector("#pass_details").style.display             = "none";
+        document.querySelector("#covered_sessions_section").style.display = "none";
 
         const today = new Date();
         const todayStr = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0");
-        document.querySelector("#mem_start_input").min   = todayStr;
-        document.querySelector("#mem_start_input").value = todayStr;
 
-        const fmt = key => prices[key] ? "£" + (prices[key] / 100).toFixed(2) : "";
-        const select = document.querySelector("#mem_type_select");
+        if (isCardedSenior) {
+            // Carded seniors (17+): monthly pass only — hide generic dropdown, show carded-specific UI
+            document.querySelector("#mem_purchase_section").style.display    = "none";
+            document.querySelector("#carded_purchase_section").style.display = "block";
 
-        // Update option labels and button text with live prices
-        for (const opt of select.options) {
-            opt.textContent = typeLabels[opt.value] + (fmt("pass_" + opt.value) ? " — " + fmt("pass_" + opt.value) : "");
+            const monthlyPrice = prices.pass_monthly ? "£" + (prices.pass_monthly / 100).toFixed(2) : "£40.00";
+            document.querySelector("#carded_start_input").min   = todayStr;
+            document.querySelector("#carded_start_input").value = todayStr;
+            document.querySelector("#btn_purchase_carded_pass").textContent = "Purchase Carded Monthly Pass — " + monthlyPrice;
+            document.querySelector("#btn_purchase_carded_pass").addEventListener("click", () => purchaseCardedPass(prices));
+        } else {
+            // Non-carded members: full day/weekly/monthly dropdown
+            document.querySelector("#mem_purchase_section").style.display    = "block";
+            document.querySelector("#carded_purchase_section").style.display = "none";
+
+            document.querySelector("#mem_start_input").min   = todayStr;
+            document.querySelector("#mem_start_input").value = todayStr;
+
+            const fmt = key => prices[key] ? "£" + (prices[key] / 100).toFixed(2) : "";
+            const select = document.querySelector("#mem_type_select");
+
+            for (const opt of select.options) {
+                opt.textContent = typeLabels[opt.value] + (fmt("pass_" + opt.value) ? " — " + fmt("pass_" + opt.value) : "");
+            }
+
+            const updateBtn = () => {
+                const price = fmt("pass_" + select.value);
+                document.querySelector("#btn_purchase_membership").textContent = "Purchase" + (price ? " — " + price : "");
+            };
+            updateBtn();
+            select.addEventListener("change", updateBtn);
+            document.querySelector("#btn_purchase_membership").addEventListener("click", () => purchaseSessionPass(prices));
         }
+    }
+}
 
-        const updateBtn = () => {
-            const price = fmt("pass_" + select.value);
-            document.querySelector("#btn_purchase_membership").textContent = "Purchase" + (price ? " — " + price : "");
-        };
-        updateBtn();
-        select.addEventListener("change", updateBtn);
-        document.querySelector("#btn_purchase_membership").addEventListener("click", () => purchaseSessionPass(prices));
+async function purchaseCardedPass(prices) {
+    const start_date = document.querySelector("#carded_start_input").value;
+    const monthlyPrice = prices.pass_monthly ? "£" + (prices.pass_monthly / 100).toFixed(2) : "£40.00";
+    const errEl = document.querySelector("#carded_pass_error_msg");
+    const btn   = document.querySelector("#btn_purchase_carded_pass");
+    errEl.textContent = "";
+
+    if (!start_date) {
+        errEl.textContent = "Please select a start date.";
+        return;
+    }
+
+    btn.textContent = "Redirecting to payment...";
+    btn.disabled    = true;
+
+    const req = await fetch("/api/membership/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ membership_type: "monthly", start_date })
+    });
+
+    if (req.ok) {
+        window.location.href = (await req.json()).url;
+    } else {
+        const fail = await req.json();
+        errEl.textContent   = fail.message;
+        btn.textContent     = "Purchase Carded Monthly Pass — " + monthlyPrice;
+        btn.disabled        = false;
     }
 }
 
@@ -841,61 +967,80 @@ async function loadShop() {
         for (const row of pd.data) prices[row.price_key] = row.value_pence;
     }
 
-    let hasAwards = false;
+    let hasNonContact = false;
+    let hasContact    = false;
     if (gymReq.ok) {
         const gd = await gymReq.json();
-        if (gd.data && gd.data.has_boxing_awards) hasAwards = true;
+        if (gd.data) {
+            hasNonContact = !!gd.data.has_boxing_awards;
+            hasContact    = !!gd.data.has_contact_awards;
+        }
     }
 
-    const fmt = p => p ? "£" + (p / 100).toFixed(2) : "£20.00";
-    const awardsPrice = fmt(prices.awards_standalone);
-
+    const fmt = (p, fallback) => p ? "£" + (p / 100).toFixed(2) : fallback;
     const grid = document.querySelector("#shop_products");
     grid.className = "product-grid";
+    grid.innerHTML = "";
 
-    const card = document.createElement("div");
-    card.className = "product-card";
-
-    if (hasAwards) {
-        card.innerHTML =
-            "<div class='product-name'>Boxing Awards Programme</div>" +
-            "<div class='product-desc'>Join the competitive Boxing Awards Programme and track your progress through official gradings.</div>" +
-            "<div class='product-price'>" + awardsPrice + "</div>" +
-            "<button class='btn-primary btn-sm' disabled style='margin-top:0;width:auto;'>Already Included</button>";
-    } else {
-        card.innerHTML =
-            "<div class='product-name'>Boxing Awards Programme</div>" +
-            "<div class='product-desc'>Join the competitive Boxing Awards Programme and track your progress through official gradings.</div>" +
-            "<div class='product-price'>" + awardsPrice + "</div>" +
-            "<button class='btn-primary btn-sm' id='btn_shop_buy_awards' style='margin-top:0;width:auto;'>Buy Now</button>" +
-            "<p class='product-msg' id='shop_awards_msg'></p>";
-        grid.appendChild(card);
-
-        document.querySelector("#btn_shop_buy_awards").addEventListener("click", async () => {
-            const btn = document.querySelector("#btn_shop_buy_awards");
-            const msg = document.querySelector("#shop_awards_msg");
-            btn.disabled = true;
-            btn.textContent = "Redirecting...";
-            msg.textContent = "";
-
-            const req = await fetch("/api/boxing-awards/checkout", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" }
+    function buildAwardCard(opts) {
+        const card = document.createElement("div");
+        card.className = "product-card";
+        if (opts.owned) {
+            card.innerHTML =
+                "<div class='product-name'>" + opts.name + "</div>" +
+                "<div class='product-desc'>" + opts.desc + "</div>" +
+                "<div class='product-price'>" + opts.price + "</div>" +
+                "<button class='btn-primary btn-sm' disabled style='margin-top:0;width:auto;'>Already Purchased</button>";
+        } else {
+            card.innerHTML =
+                "<div class='product-name'>" + opts.name + "</div>" +
+                "<div class='product-desc'>" + opts.desc + "</div>" +
+                "<div class='product-price'>" + opts.price + "</div>" +
+                "<button class='btn-primary btn-sm' id='" + opts.btnId + "' style='margin-top:0;width:auto;'>Buy Now</button>" +
+                "<p class='product-msg' id='" + opts.msgId + "'></p>";
+            card.querySelector("#" + opts.btnId).addEventListener("click", async () => {
+                const btn = card.querySelector("#" + opts.btnId);
+                const msg = card.querySelector("#" + opts.msgId);
+                btn.disabled = true;
+                btn.textContent = "Redirecting...";
+                msg.textContent = "";
+                const req = await fetch("/api/boxing-awards/checkout", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ award_type: opts.awardType })
+                });
+                if (req.ok) {
+                    window.location.href = (await req.json()).url;
+                } else {
+                    const fail = await req.json();
+                    msg.textContent = fail.message || "Purchase failed. Please try again.";
+                    btn.disabled = false;
+                    btn.textContent = "Buy Now";
+                }
             });
-
-            if (req.ok) {
-                window.location.href = (await req.json()).url;
-            } else {
-                const fail = await req.json();
-                msg.textContent = fail.message || "Purchase failed. Please try again.";
-                btn.disabled = false;
-                btn.textContent = "Buy Now";
-            }
-        });
-        return;
+        }
+        return card;
     }
 
-    grid.appendChild(card);
+    grid.appendChild(buildAwardCard({
+        name:      "Non-Contact Boxing Awards (Awards 1–3)",
+        desc:      "Begin your official grading journey with the first three Boxing Awards levels, covering fundamentals, footwork and non-contact technique.",
+        price:     fmt(prices.awards_standalone, "£20.00"),
+        awardType: "non_contact",
+        owned:     hasNonContact,
+        btnId:     "btn_shop_buy_nc",
+        msgId:     "shop_nc_msg"
+    }));
+
+    grid.appendChild(buildAwardCard({
+        name:      "Contact Boxing Awards (Awards 4–6)",
+        desc:      "Progress to contact sparring and advanced technique with Awards 4–6, building on the Non-Contact foundation.",
+        price:     fmt(prices.awards_contact, "£20.00"),
+        awardType: "contact",
+        owned:     hasContact,
+        btnId:     "btn_shop_buy_c",
+        msgId:     "shop_c_msg"
+    }));
 }
 
 // ── Check In ──────────────────────────────────────────────────────────────────

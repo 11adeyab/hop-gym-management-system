@@ -1,5 +1,5 @@
 let selectedMembership = null;
-let prices = { membership_non_carded: 1000, membership_carded: 2500, awards_with_membership: 1000 };
+let prices = { membership_non_carded: 1000, membership_carded: 2500, awards_with_membership: 1800 };
 let isMinnow = false;
 
 (async () => {
@@ -146,7 +146,7 @@ function buildOrderSummary(dob) {
 
         addOrderRow(summary, typeLabels[selectedMembership] + " (Annual)", fmt(memAmt), false);
         if (include_awards) {
-            addOrderRow(summary, "Boxing Awards Programme", fmt(awardsAmt), false);
+            addOrderRow(summary, "Non-Contact Boxing Awards (Awards 1–3)", fmt(awardsAmt), false);
         }
         addOrderRow(summary, "Total", fmt(total), true);
         minnowNotice.style.display = "none";
