@@ -44,6 +44,10 @@ function setStepIndicator(step) {
 
 // Step 1 Continue → Step 2
 function advanceToDetails() {
+    if (!selectedMembership) {
+        document.querySelector("#step1_error").textContent = "Please select a membership type to continue.";
+        return;
+    }
     document.querySelector("#step1_error").textContent = "";
     document.querySelector("#step_1").style.display = "none";
     document.querySelector("#step_2").style.display = "block";
@@ -174,13 +178,14 @@ async function submitRegistration() {
     const dob   = year + "-" + month + "-" + String(day).padStart(2, "0");
 
     const payload = {
-        first_name: document.querySelector("#first_name").value.trim(),
-        last_name:  document.querySelector("#last_name").value.trim(),
+        first_name:   document.querySelector("#first_name").value.trim(),
+        last_name:    document.querySelector("#last_name").value.trim(),
         dob,
-        gender:   document.querySelector("#gender").value,
-        email:    document.querySelector("#email").value.trim(),
-        phone:    document.querySelector("#phone").value.trim(),
-        password: document.querySelector("#password").value
+        gender:       document.querySelector("#gender").value,
+        email:        document.querySelector("#email").value.trim(),
+        phone:        document.querySelector("#phone").value.trim(),
+        password:     document.querySelector("#password").value,
+        medical_info: document.querySelector("#medical_info").value.trim()
     };
 
     const endpoint = isMinnow ? "/register/minnow" : "/register/checkout";

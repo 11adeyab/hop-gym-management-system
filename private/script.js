@@ -1,9 +1,12 @@
 //variables that track what the user is currently viewing
-let allSessions    = [];
-let allBookings    = [];
-let weekOffset     = 0;
-let activeFilter   = "upcoming";
-let checkinScanner = null;
+let allSessions      = [];
+let allBookings      = [];
+let weekOffset       = 0;
+let activeFilter     = "upcoming";
+let checkinScanner    = null;
+let checkinResultData = null;  // stores last check-in result for the result view
+let timetableView     = "week"; // "week" or "list"
+let bookedSessionIds  = new Set(); // session IDs the user has already booked
 
 // Prefetched at page load — used to determine pass coverage in the booking modal
 let pageGymData  = null;
@@ -52,14 +55,25 @@ document.querySelector("#nav_book_sessions").addEventListener("click",    () => 
 document.querySelector("#nav_my_bookings").addEventListener("click",      () => showView("my_bookings"));
 document.querySelector("#nav_gym_membership").addEventListener("click",   () => showView("gym_membership"));
 document.querySelector("#nav_session_passes").addEventListener("click",   () => showView("session_passes"));
-document.querySelector("#nav_shop").addEventListener("click",             () => showView("shop"));
-document.querySelector("#nav_checkin").addEventListener("click",          () => showView("checkin"));
+document.querySelector("#nav_shop").addEventListener("click",        () => showView("shop"));
+document.querySelector("#nav_my_account").addEventListener("click",  () => showView("my_account"));
 
-showView("overview");
+// Restore check-in result view if the user refreshed mid-result
+(function restoreCheckinResult() {
+    try {
+        const stored = sessionStorage.getItem("checkinResult");
+        if (stored) {
+            checkinResultData = JSON.parse(stored);
+            showView("checkin_result");
+            return;
+        }
+    } catch (_) {}
+    showView("overview");
+}());
 
 
 async function showView(viewName) {
-    // Stop the check-in scanner if it's running before leaving the view
+    // Stop the check-in scanner whenever leaving any view
     if (checkinScanner !== null) {
         try { await checkinScanner.clear(); } catch (_) {}
         checkinScanner = null;
@@ -68,19 +82,19 @@ async function showView(viewName) {
     for (let i of document.querySelectorAll("nav a")) {
         i.classList.remove("active");
     }
-    document.querySelector("#nav_" + viewName).classList.add("active");
+    // checkin_result is a sub-page of overview — keep Overview nav highlighted
+    const activeNavId = viewName === "checkin_result" ? "overview" : viewName;
+    const navEl = document.querySelector("#nav_" + activeNavId);
+    if (navEl) navEl.classList.add("active");
 
     const template = document.querySelector("#template_" + viewName);
-    const content  = template.content.cloneNode(true);
-
     const main = document.querySelector("#main_content");
     main.innerHTML = "";
-    main.appendChild(content);
+    if (template) main.appendChild(template.content.cloneNode(true));
 
-    // Load data for the view that was just shown
     if (viewName === "overview") {
         loadOverview();
-    } 
+    }
     else if (viewName === "book_sessions") {
         loadBookSessions();
     }
@@ -96,78 +110,79 @@ async function showView(viewName) {
     else if (viewName === "shop") {
         loadShop();
     }
-    else if (viewName === "checkin") {
-        loadCheckin();
+    else if (viewName === "my_account") {
+        loadMyAccount();
+    }
+    else if (viewName === "checkin_result") {
+        loadCheckinResult();
     }
 }
 
 
 async function loadOverview() {
-    // Time-based greeting
-    const hour = new Date().getHours();
+    const hour   = new Date().getHours();
     const period = hour < 12 ? "Morning" : hour < 17 ? "Afternoon" : "Evening";
-
-    // Long date string e.g. "Saturday, 10 May 2026"
-    const dateStr = new Date().toLocaleDateString("en-GB", {
+    document.querySelector("#greeting_date").textContent = new Date().toLocaleDateString("en-GB", {
         weekday: "long", day: "numeric", month: "long", year: "numeric"
     });
-    document.querySelector("#greeting_date").textContent = dateStr;
 
     const [userReq, bookingsReq, membershipReq, gymReq] = await Promise.all([
-        fetch("/api/user"),
-        fetch("/api/bookings"),
-        fetch("/api/membership"),
-        fetch("/api/gym-membership")
+        fetch("/api/user"), fetch("/api/bookings"), fetch("/api/membership"), fetch("/api/gym-membership")
     ]);
 
-    // Set greeting using the user's first name
-    let firstName = "";
-    if (userReq.ok) {
-        const d = await userReq.json();
-        firstName = d.data.first_name;
-    }
-    document.querySelector("#greeting_text").textContent = "Good " + period + ", " + firstName;
+    let user = null;
+    if (userReq.ok) { user = (await userReq.json()).data; }
+    document.querySelector("#greeting_text").textContent = "Good " + period + (user ? ", " + user.first_name : "");
 
-    // Compute booking stats
+    // Booking stats
     let bookings = [];
-    if (bookingsReq.ok) {
-        const d = await bookingsReq.json();
-        bookings = d.data || [];
-    }
-
-    const now = new Date();
+    if (bookingsReq.ok) { bookings = (await bookingsReq.json()).data || []; }
+    const now              = new Date();
     const pastBookings     = bookings.filter(b => new Date(b.start_date + "T" + b.start_time) < now);
     const attendedBookings = bookings.filter(b => !!b.attended);
     const upcomingBookings = bookings
         .filter(b => new Date(b.start_date + "T" + b.start_time) >= now)
         .sort((a, z) => new Date(a.start_date + "T" + a.start_time) - new Date(z.start_date + "T" + z.start_time));
 
+    document.querySelector("#stat_total_bookings").textContent = upcomingBookings.length;
+    document.querySelector("#stat_bookings_sub").textContent   = bookings.length + " total";
+
     const attendanceRate = pastBookings.length > 0
         ? Math.round((attendedBookings.length / pastBookings.length) * 100) + "%"
         : "N/A";
-
-    document.querySelector("#stat_total_bookings").textContent  = bookings.length;
     document.querySelector("#stat_attendance_rate").textContent = attendanceRate;
+    document.querySelector("#stat_attendance_sub").textContent = pastBookings.length > 0
+        ? attendedBookings.length + " of " + pastBookings.length + " sessions"
+        : "No past sessions";
 
-    // Gym membership status for the overview stat
-    let membershipLabel = "None";
-    if (gymReq.ok) {
-        const d = await gymReq.json();
-        if (d.data) {
-            const labels = { non_carded: "Non-Carded", carded: "Carded" };
-            membershipLabel = labels[d.data.membership_type] || "Active";
-        }
+    // Membership stat — show category (Senior/Junior/Minnow + Carded/Non-Carded)
+    let gymData = null;
+    if (gymReq.ok) { gymData = (await gymReq.json()).data; }
+    if (gymData) {
+        const age = user ? calcAge(user.dob) : null;
+        const ageGroup = age === null ? "" : age < 10 ? "Minnow" : age < 17 ? "Junior" : "Senior";
+        const typeMap = {
+            carded: "Carded", non_carded: "Non-Carded",
+            minnow_carded: "Carded", minnow_non_carded: "Non-Carded"
+        };
+        const typeLabel = typeMap[gymData.membership_type] || gymData.membership_type;
+        document.querySelector("#stat_membership").innerHTML =
+            (ageGroup ? ageGroup + "<br>" : "") + typeLabel;
+    } else {
+        document.querySelector("#stat_membership").textContent = "None";
     }
-    // Show session pass alongside if active
-    if (membershipReq.ok) {
-        const d = await membershipReq.json();
-        if (d.data) {
-            const passLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
-            const passLabel  = passLabels[d.data.membership_type] || "Pass";
-            membershipLabel  = membershipLabel === "None" ? passLabel : membershipLabel + " + " + passLabel;
-        }
+
+    // Pass stat
+    let passData = null;
+    if (membershipReq.ok) { passData = (await membershipReq.json()).data; }
+    if (passData && passData.membership_type) {
+        const passLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Pass" };
+        document.querySelector("#stat_pass").textContent    = passLabels[passData.membership_type] || "Active";
+        document.querySelector("#stat_pass_sub").textContent = "Expires " + passData.end_date;
+    } else {
+        document.querySelector("#stat_pass").textContent    = "None";
+        document.querySelector("#stat_pass_sub").textContent = "";
     }
-    document.querySelector("#stat_membership").textContent = membershipLabel;
 
     // Upcoming bookings list (show at most 5)
     const list = document.querySelector("#overview_upcoming");
@@ -177,8 +192,7 @@ async function loadOverview() {
         empty.innerHTML = "No upcoming bookings. <a href='#' id='link_book_now'>Book a session</a>";
         list.appendChild(empty);
         document.querySelector("#link_book_now").addEventListener("click", (e) => {
-            e.preventDefault();
-            showView("book_sessions");
+            e.preventDefault(); showView("book_sessions");
         });
     } else {
         for (const booking of upcomingBookings.slice(0, 5)) {
@@ -192,30 +206,62 @@ async function loadOverview() {
             list.appendChild(row);
         }
     }
+
+    // Wire the check-in scanner button on the overview page
+    const scanBtn = document.querySelector("#btn_start_checkin_scanner");
+    if (scanBtn) {
+        scanBtn.addEventListener("click", startCheckinScanner);
+    }
 }
 
 
 
 async function loadBookSessions() {
-    weekOffset = 0;
+    weekOffset    = 0;
+    timetableView = "week";
 
-    // Wire up the Previous and Next week buttons
-    document.querySelector("#btn_prev_week").addEventListener("click", () => {
-        weekOffset = weekOffset - 1;
+    document.querySelector("#btn_prev_week").addEventListener("click", () => { weekOffset--; renderCurrentView(); });
+    document.querySelector("#btn_next_week").addEventListener("click", () => { weekOffset++; renderCurrentView(); });
+
+    document.querySelector("#btn_view_week").addEventListener("click", () => {
+        timetableView = "week";
+        document.querySelector("#btn_view_week").classList.add("active");
+        document.querySelector("#btn_view_list").classList.remove("active");
+        document.querySelector("#week_view_wrap").style.display = "";
+        document.querySelector("#list_view_wrap").style.display = "none";
         renderTimetable();
     });
 
-    document.querySelector("#btn_next_week").addEventListener("click", () => {
-        weekOffset = weekOffset + 1;
-        renderTimetable();
+    document.querySelector("#btn_view_list").addEventListener("click", () => {
+        timetableView = "list";
+        document.querySelector("#btn_view_list").classList.add("active");
+        document.querySelector("#btn_view_week").classList.remove("active");
+        document.querySelector("#week_view_wrap").style.display = "none";
+        document.querySelector("#list_view_wrap").style.display = "";
+        renderListView();
     });
 
-    // Fetch all sessions from the server once, then filter by week in renderTimetable()
-    
-    const request = await fetch("/api/sessions");
-    if (request.ok) {
-        const response = await request.json();
-        allSessions = response.data;
+    // Fetch sessions and bookings in parallel
+    const [sessionsReq, bookingsReq] = await Promise.all([
+        fetch("/api/sessions"),
+        fetch("/api/bookings")
+    ]);
+
+    if (sessionsReq.ok) {
+        allSessions = (await sessionsReq.json()).data;
+    }
+    if (bookingsReq.ok) {
+        const bData = (await bookingsReq.json()).data || [];
+        bookedSessionIds = new Set(bData.map(b => b.session_id));
+    }
+
+    renderCurrentView();
+}
+
+function renderCurrentView() {
+    if (timetableView === "list") {
+        renderListView();
+    } else {
         renderTimetable();
     }
 }
@@ -274,17 +320,93 @@ function renderTimetable() {
                 const memBadge = memElig !== "Any"
                     ? "<div class='session-card-badge'>" + memElig + "</div>"
                     : "";
+                const isBooked  = bookedSessionIds.has(session.session_id);
+                const covered   = isCoveredByMonthlyPass(session);
+                const bookedBadge = isBooked
+                    ? "<div class='session-card-badge' style='background:var(--success-bg);color:var(--success);border-color:rgba(22,163,74,0.3);'>&#10003; Booked</div>"
+                    : (covered ? "<div class='session-card-badge' style='background:rgba(15,113,240,0.08);color:var(--primary);border-color:rgba(15,113,240,0.3);'>Pass</div>" : "");
+                if (isBooked) card.classList.add("session-card-booked");
                 card.innerHTML =
                     "<div class='session-card-name'>" + session.session_name + "</div>" +
                     "<div class='session-card-time'>" + session.start_time.split(":").slice(0, 2).join(":") + "</div>" +
                     "<div class='session-card-spaces'>" + session.capacity + " spaces" + (cardPrice ? " &middot; " + cardPrice : "") + "</div>" +
-                    memBadge;
+                    memBadge + bookedBadge;
                 card.addEventListener("click", () => openModal(session));
                 sessionsContainer.appendChild(card);
             }
         }
 
         grid.appendChild(col);
+    }
+}
+
+function renderListView() {
+    const week = getWeekRange(weekOffset);
+    document.querySelector("#week_label").textContent = formatDate(week.start) + " – " + formatDate(week.end);
+
+    const container = document.querySelector("#list_view_container");
+    container.innerHTML = "";
+
+    const now      = new Date();
+    const todayStr = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
+    const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+    for (let d = 0; d < 7; d++) {
+        const dayDate = new Date(week.start);
+        dayDate.setDate(week.start.getDate() + d);
+        const dayStr = dayDate.getFullYear() + "-" + String(dayDate.getMonth() + 1).padStart(2, "0") + "-" + String(dayDate.getDate()).padStart(2, "0");
+
+        const daySessions = allSessions
+            .filter(s => s.start_date === dayStr)
+            .sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+        const group = document.createElement("div");
+        group.className = "list-day-group";
+
+        const header = document.createElement("div");
+        header.className = "list-day-header" + (dayStr === todayStr ? " today" : "");
+        header.textContent = dayNames[d] + "  " + dayDate.getDate() + " " + dayDate.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+        group.appendChild(header);
+
+        if (daySessions.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "list-session-row";
+            empty.style.cssText = "color:var(--muted);cursor:default;";
+            empty.innerHTML = "<span class='list-session-time' style='color:var(--muted);'>—</span><span class='list-session-name' style='font-weight:400;color:var(--muted);'>No sessions</span>";
+            group.appendChild(empty);
+        } else {
+            for (const session of daySessions) {
+                const time      = session.start_time.split(":").slice(0, 2).join(":");
+                const price     = session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "";
+                const memElig   = session.membership_eligibility || "Any";
+                const isBooked  = bookedSessionIds.has(session.session_id);
+                const covered   = isCoveredByMonthlyPass(session);
+
+                const row = document.createElement("div");
+                row.className = "list-session-row";
+
+                const badgeHtml = isBooked
+                    ? "<span class='list-session-badge badge-booked'>&#10003; Booked</span>"
+                    : covered
+                        ? "<span class='list-session-badge badge-covered'>Pass</span>"
+                        : memElig !== "Any"
+                            ? "<span class='list-session-badge badge-carded'>" + memElig + "</span>"
+                            : "";
+
+                const metaParts = [session.duration + " hr", session.capacity + " spaces"];
+                if (price && !covered) metaParts.push(price);
+
+                row.innerHTML =
+                    "<span class='list-session-time'>" + time + "</span>" +
+                    "<span class='list-session-name'>" + session.session_name + "</span>" +
+                    "<span class='list-session-meta'>" + metaParts.join(" · ") + "</span>" +
+                    badgeHtml;
+
+                row.addEventListener("click", () => openModal(session));
+                group.appendChild(row);
+            }
+        }
+        container.appendChild(group);
     }
 }
 
@@ -321,16 +443,31 @@ function openModal(session) {
         descRow.style.display = "none";
     }
 
-    const covered    = isCoveredByMonthlyPass(session);
+    const isBooked  = bookedSessionIds.has(session.session_id);
+    const covered   = isCoveredByMonthlyPass(session);
     const priceLabel = covered ? "Covered by monthly pass" :
         (session.price_pence != null ? "£" + (session.price_pence / 100).toFixed(2) : "—");
-    document.querySelector("#modal_price_display").textContent = priceLabel;
-    document.querySelector("#modal_btn_book").textContent = "Book — " + priceLabel;
+    document.querySelector("#modal_price_display").textContent = isBooked ? "✓ You are booked" : priceLabel;
+
+    const bookBtn  = document.querySelector("#modal_btn_book");
+    const closeBtn = document.querySelector("#modal_btn_close");
+
+    if (isBooked) {
+        bookBtn.textContent = "✓ Already Booked";
+        bookBtn.disabled    = true;
+        bookBtn.style.background = "var(--success)";
+        bookBtn.style.cursor     = "default";
+    } else {
+        bookBtn.textContent      = "Book — " + priceLabel;
+        bookBtn.disabled         = false;
+        bookBtn.style.background = "";
+        bookBtn.style.cursor     = "";
+    }
 
     document.querySelector("#modal_overlay").classList.add("open");
 
-    document.querySelector("#modal_btn_book").onclick = () => bookSession(session);
-    document.querySelector("#modal_btn_close").onclick = () => {
+    bookBtn.onclick = isBooked ? null : () => bookSession(session);
+    closeBtn.onclick = () => {
         document.querySelector("#modal_overlay").classList.remove("open");
     };
 }
@@ -354,11 +491,11 @@ async function bookSession(session) {
             if (data.free) {
                 // Booking confirmed via monthly pass — close the modal and refresh the timetable in place
                 document.querySelector("#modal_overlay").classList.remove("open");
+                bookedSessionIds.add(session.session_id);
                 const refreshReq = await fetch("/api/sessions");
                 if (refreshReq.ok) {
-                    const refreshData = await refreshReq.json();
-                    allSessions = refreshData.data;
-                    renderTimetable();
+                    allSessions = (await refreshReq.json()).data;
+                    renderCurrentView();
                 }
                 return;
             }
@@ -445,7 +582,7 @@ function renderBookings() {
         card.className = "booking-card";
         let attendanceLabel = "";
         if (activeFilter === "attended" && booking.checkin_datetime) {
-            const checkinDate = new Date(booking.checkin_datetime);
+            const checkinDate = new Date(booking.checkin_datetime.replace(" ", "T"));
             const checkinTime = String(checkinDate.getHours()).padStart(2, "0") + ":" + String(checkinDate.getMinutes()).padStart(2, "0");
             if (checkinTime > time) {
                 attendanceLabel = "<p>Checked in at " + checkinTime + " — <strong>Late</strong></p>";
@@ -463,44 +600,20 @@ function renderBookings() {
                 attendanceLabel +
             "</div>";
 
-        if (activeFilter !== "attended") {
-            let buttonsHtml = "<button id='btn_qr_" + booking.booking_id + "' class='btn-ghost btn-sm'>View QR</button>";
-            if (activeFilter === "upcoming") {
-                buttonsHtml += "<button id='btn_cancel_" + booking.booking_id + "' class='btn-danger btn-sm'>Cancel</button>";
-            }
-            card.innerHTML += "<div>" + buttonsHtml + "</div>";
+        if (activeFilter === "upcoming") {
+            card.innerHTML += "<div><button id='btn_cancel_" + booking.booking_id + "' class='btn-danger btn-sm'>Cancel</button></div>";
         }
 
         list.appendChild(card);
 
-        if (activeFilter !== "attended") {
-            document.querySelector("#btn_qr_" + booking.booking_id).addEventListener("click", () => {
-                openQRModal(booking);
+        if (activeFilter === "upcoming") {
+            document.querySelector("#btn_cancel_" + booking.booking_id).addEventListener("click", () => {
+                openCancelModal(booking);
             });
-
-            if (activeFilter === "upcoming") {
-                document.querySelector("#btn_cancel_" + booking.booking_id).addEventListener("click", () => {
-                    openCancelModal(booking);
-                });
-            }
         }
     }
 }
 
-function openQRModal(booking) {
-    const date = booking.start_date.split("T")[0];
-    const time = booking.start_time.split(":").slice(0, 2).join(":");
-
-    document.querySelector("#modal_qr_session_name").textContent = booking.session_name;
-    document.querySelector("#modal_qr_details").textContent = date + " at " + time + " (" + booking.duration + " hr)";
-    document.querySelector("#modal_qr_image").src = booking.qr_code;
-
-    document.querySelector("#modal_qr_overlay").classList.add("open");
-
-    document.querySelector("#modal_qr_btn_close").onclick = () => {
-        document.querySelector("#modal_qr_overlay").classList.remove("open");
-    };
-}
 
 function openCancelModal(booking) {
     document.querySelector("#modal_cancel_session_name").textContent = booking.session_name;
@@ -606,8 +719,6 @@ function renderGymMembership(membership, prices, user) {
         document.querySelector("#gym_mem_nc_awards_status").textContent = membership.has_boxing_awards  ? "Active" : "Not purchased";
         document.querySelector("#gym_mem_c_awards_status").textContent  = membership.has_contact_awards ? "Active" : "Not purchased";
 
-        document.querySelector("#btn_gym_mem_qr").onclick = () => openGymMemQRModal(membership);
-
         const isMinnow = ["minnow_carded", "minnow_non_carded"].includes(membership.membership_type);
         const needsNonContact = !isMinnow && !membership.has_boxing_awards;
         const needsContact    = !isMinnow && !membership.has_contact_awards;
@@ -654,29 +765,6 @@ function renderGymMembership(membership, prices, user) {
     }
 }
 
-async function openGymMemQRModal(membership) {
-    const typeLabels = { non_carded: "Non-Carded", carded: "Carded", minnow_non_carded: "Minnows (Non-Carded)", minnow_carded: "Minnows (Carded)" };
-    document.querySelector("#modal_gym_mem_qr_details").textContent = (typeLabels[membership.membership_type] || membership.membership_type) + "  ·  Valid until " + membership.end_date;
-    const img = document.querySelector("#modal_gym_mem_qr_image");
-    img.src = "";
-    img.alt = "Loading QR code…";
-    document.querySelector("#modal_gym_mem_qr_overlay").classList.add("open");
-    document.querySelector("#modal_gym_mem_qr_btn_close").onclick = () => {
-        document.querySelector("#modal_gym_mem_qr_overlay").classList.remove("open");
-    };
-    try {
-        const resp = await fetch("/api/member/membership-qr");
-        if (resp.ok) {
-            const data = await resp.json();
-            img.src = data.data;
-            img.alt = "Gym Membership QR Code";
-        } else {
-            img.alt = "QR code unavailable";
-        }
-    } catch (_) {
-        img.alt = "QR code unavailable";
-    }
-}
 
 function calcAge(dob) {
     if (!dob) return null;
@@ -760,8 +848,6 @@ function renderSessionPass(membership, prices, gymData, userData) {
         document.querySelector("#mem_type").textContent       = typeLabels[membership.membership_type] || membership.membership_type;
         document.querySelector("#mem_start_date").textContent = membership.start_date;
         document.querySelector("#mem_end_date").textContent   = membership.end_date;
-
-        document.querySelector("#btn_mem_qr").addEventListener("click", () => openPassQRModal(membership));
 
         document.querySelector("#covered_sessions_section").style.display = "block";
         const tbody = document.querySelector("#covered_sessions_body");
@@ -857,29 +943,6 @@ async function purchaseCardedPass(prices) {
 }
 
 
-async function openPassQRModal(membership) {
-    const typeLabels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Ticket" };
-    document.querySelector("#modal_mem_qr_details").textContent = (typeLabels[membership.membership_type] || membership.membership_type) + "  ·  " + membership.start_date + " to " + membership.end_date;
-    const img = document.querySelector("#modal_mem_qr_image");
-    img.src = "";
-    img.alt = "Loading QR code…";
-    document.querySelector("#modal_mem_qr_overlay").classList.add("open");
-    document.querySelector("#modal_mem_qr_btn_close").onclick = () => {
-        document.querySelector("#modal_mem_qr_overlay").classList.remove("open");
-    };
-    try {
-        const resp = await fetch("/api/member/pass-qr");
-        if (resp.ok) {
-            const data = await resp.json();
-            img.src = data.data;
-            img.alt = "Ticket QR Code";
-        } else {
-            img.alt = "QR code unavailable";
-        }
-    } catch (_) {
-        img.alt = "QR code unavailable";
-    }
-}
 
 async function purchaseSessionPass(prices) {
     const membership_type = document.querySelector("#mem_type_select").value;
@@ -1043,14 +1106,103 @@ async function loadShop() {
     }));
 }
 
-// ── Check In ──────────────────────────────────────────────────────────────────
+// ── My Account ────────────────────────────────────────────────────────────────
 
-function loadCheckin() {
-    document.querySelector("#btn_start_checkin_scanner").addEventListener("click", startCheckinScanner);
+async function loadMyAccount() {
+    const [userReq, gymReq, passReq] = await Promise.all([
+        fetch("/api/user"), fetch("/api/gym-membership"), fetch("/api/membership")
+    ]);
+
+    if (userReq.ok) {
+        const u = (await userReq.json()).data;
+        document.querySelector("#acc_first_name").value = u.first_name || "";
+        document.querySelector("#acc_last_name").value  = u.last_name  || "";
+        document.querySelector("#acc_email").value      = u.email      || "";
+        document.querySelector("#acc_phone").value      = u.phone      || "";
+        document.querySelector("#acc_dob").textContent  = u.dob        || "—";
+        document.querySelector("#acc_gender").textContent = u.gender   || "—";
+    }
+
+    const gymContent  = document.querySelector("#acc_gym_mem_content");
+    const passContent = document.querySelector("#acc_pass_content");
+
+    if (gymReq.ok) {
+        const gd = (await gymReq.json()).data;
+        if (gd) {
+            const labels = { carded: "Carded Membership", non_carded: "Non-Carded Membership", minnow_carded: "Minnows (Carded)", minnow_non_carded: "Minnows (Non-Carded)" };
+            gymContent.innerHTML =
+                "<span class='mem-status-badge mem-status-active' style='margin-bottom:12px;'>Active</span>" +
+                "<div class='mem-detail-row'><span class='mem-label'>Type</span><span>" + (labels[gd.membership_type] || gd.membership_type) + "</span></div>" +
+                "<div class='mem-detail-row'><span class='mem-label'>Valid Until</span><span>" + gd.end_date + "</span></div>";
+        } else {
+            gymContent.innerHTML = "<p style='color:var(--muted);font-size:0.87rem;'>No active membership. <a href='#' style='color:var(--primary);font-weight:600;' id='acc_link_mem'>Join now</a></p>";
+            const link = gymContent.querySelector("#acc_link_mem");
+            if (link) link.addEventListener("click", e => { e.preventDefault(); showView("gym_membership"); });
+        }
+    }
+
+    if (passReq.ok) {
+        const pd = (await passReq.json()).data;
+        if (pd && pd.membership_type) {
+            const labels = { day: "Day Ticket", weekly: "Weekly Ticket", monthly: "Monthly Pass" };
+            passContent.innerHTML =
+                "<span class='mem-status-badge mem-status-active' style='margin-bottom:12px;'>Active</span>" +
+                "<div class='mem-detail-row'><span class='mem-label'>Type</span><span>" + (labels[pd.membership_type] || pd.membership_type) + "</span></div>" +
+                "<div class='mem-detail-row'><span class='mem-label'>Start Date</span><span>" + pd.start_date + "</span></div>" +
+                "<div class='mem-detail-row'><span class='mem-label'>Expiry</span><span>" + pd.end_date + "</span></div>";
+        } else {
+            passContent.innerHTML = "<p style='color:var(--muted);font-size:0.87rem;'>No active ticket pass. <a href='#' style='color:var(--primary);font-weight:600;' id='acc_link_pass'>Buy a pass</a></p>";
+            const link = passContent.querySelector("#acc_link_pass");
+            if (link) link.addEventListener("click", e => { e.preventDefault(); showView("session_passes"); });
+        }
+    }
+
+    document.querySelector("#btn_acc_save").addEventListener("click", async () => {
+        const errEl = document.querySelector("#acc_error_msg");
+        const okEl  = document.querySelector("#acc_success_msg");
+        errEl.textContent = "";
+        okEl.textContent  = "";
+
+        const payload = {
+            first_name: document.querySelector("#acc_first_name").value.trim(),
+            last_name:  document.querySelector("#acc_last_name").value.trim(),
+            email:      document.querySelector("#acc_email").value.trim(),
+            phone:      document.querySelector("#acc_phone").value.trim()
+        };
+
+        if (!payload.first_name || !payload.last_name || !payload.email || !payload.phone) {
+            errEl.textContent = "Please fill in all fields.";
+            return;
+        }
+
+        const btn = document.querySelector("#btn_acc_save");
+        btn.disabled    = true;
+        btn.textContent = "Saving...";
+
+        const req = await fetch("/api/user/profile", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (req.ok) {
+            okEl.textContent = "Profile updated successfully.";
+            document.querySelector("#sidebar_user_name").textContent = payload.first_name + " " + payload.last_name;
+        } else {
+            const fail = await req.json();
+            errEl.textContent = fail.message || "Update failed.";
+        }
+
+        btn.disabled    = false;
+        btn.textContent = "Save Changes";
+    });
 }
 
+// ── Check In ──────────────────────────────────────────────────────────────────
+
 function startCheckinScanner() {
-    document.querySelector("#btn_start_checkin_scanner").style.display = "none";
+    const scanBtn = document.querySelector("#btn_start_checkin_scanner");
+    if (scanBtn) scanBtn.style.display = "none";
 
     checkinScanner = new Html5QrcodeScanner("checkin_scanner_container", {
         fps: 20,
@@ -1061,34 +1213,70 @@ function startCheckinScanner() {
 }
 
 async function onCheckinScanSuccess(decodedText) {
-    await checkinScanner.clear();
+    // Stop camera immediately after reading
+    try { await checkinScanner.clear(); } catch (_) {}
     checkinScanner = null;
 
-    let message  = "❌ Check-in failed — network error. Please try again.";
-    let cardClass = "scan-fail";
-
+    let result = null;
     try {
         const req = await fetch("/attendance", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ decodedText })
         });
-        const result = await req.json();
-        message = result.message;
-        if (message && message.startsWith("✅"))                                       cardClass = "scan-ok";
-        else if (message && (message.startsWith("⏰") || message.startsWith("⚠️"))) cardClass = "scan-warn";
-    } catch (_) { /* keep defaults */ }
+        result = await req.json();
+    } catch (_) {
+        result = { message: "❌ Check-in failed — network error. Please try again." };
+    }
 
-    const resultDiv = document.querySelector("#checkin_scan_result");
-    const card      = document.createElement("div");
-    card.className  = "scan-result-card " + cardClass;
-    card.innerHTML  = "<p>" + message + "</p>" +
-                      "<button id='btn_scan_again' class='btn-ghost'>Scan Again</button>";
-    resultDiv.innerHTML = "";
-    resultDiv.appendChild(card);
+    checkinResultData = result;
+    try { sessionStorage.setItem("checkinResult", JSON.stringify(result)); } catch (_) {}
+    showView("checkin_result");
+}
 
-    document.querySelector("#btn_scan_again").addEventListener("click", () => {
-        resultDiv.innerHTML = "";
-        document.querySelector("#btn_start_checkin_scanner").style.display = "block";
+function loadCheckinResult() {
+    const container = document.querySelector("#checkin_result_content");
+
+    // Restore from sessionStorage if in-memory state was lost (e.g. page refresh)
+    if (!checkinResultData) {
+        try {
+            const stored = sessionStorage.getItem("checkinResult");
+            if (stored) checkinResultData = JSON.parse(stored);
+        } catch (_) {}
+    }
+    sessionStorage.removeItem("checkinResult");
+
+    const result    = checkinResultData || {};
+    const message   = result.message || "❌ Unknown error.";
+
+    let cardClass = "scan-fail";
+    if (message.startsWith("✅"))                                        cardClass = "scan-ok";
+    else if (message.startsWith("⏰") || message.startsWith("⚠️"))  cardClass = "scan-warn";
+
+    let html = "";
+
+    if (result.success && result.data) {
+        const d = result.data;
+        html =
+            "<div class='scan-result-card " + cardClass + "'>" +
+            "<p>" + message + "</p>" +
+            "<div style='display:grid;gap:6px;font-size:0.9rem;'>" +
+            "<div><strong>Member:</strong> "         + d.member_name  + "</div>" +
+            "<div><strong>Session:</strong> "        + d.session_name + "</div>" +
+            "<div><strong>Date:</strong> "           + d.session_date + "</div>" +
+            "<div><strong>Session time:</strong> "   + d.session_time + "</div>" +
+            "<div><strong>Checked in at:</strong> "  + d.checkin_time + "</div>" +
+            "</div>" +
+            "<p style='margin-top:14px;font-size:0.82rem;font-weight:600;'>✓ Attendance has been recorded.</p>" +
+            "</div>";
+    } else {
+        html = "<div class='scan-result-card " + cardClass + "'><p>" + message + "</p></div>";
+    }
+
+    container.innerHTML = html;
+
+    document.querySelector("#btn_checkin_back").addEventListener("click", () => {
+        checkinResultData = null;
+        showView("overview");
     });
 }

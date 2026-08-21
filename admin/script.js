@@ -3,6 +3,15 @@ let editingSessionId = null; // tracks whether the session modal is in "add" or 
 let scanner = null; // holds the Html5QrcodeScanner instance so we can stop it when switching views
 let adminWeekOffset = 0; // how many weeks forward or back from the current week we're viewing
 
+function esc(str) {
+    return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
 
 // Hamburger menu toggle (mobile)
 document.querySelector("#hamburger_btn").addEventListener("click", () => {
@@ -410,8 +419,8 @@ function renderAttendanceModal(attendees) {
             <tbody>
                 ${attendees.map(a =>
                     `<tr style="border-bottom:1px solid var(--border);">
-                        <td style="padding:10px 10px;">${a.first_name} ${a.last_name}</td>
-                        <td style="padding:10px 10px;color:var(--muted);font-size:0.8rem;line-height:1.5;">${a.email}<br>${a.phone || ""}</td>
+                        <td style="padding:10px 10px;">${esc(a.first_name)} ${esc(a.last_name)}</td>
+                        <td style="padding:10px 10px;color:var(--muted);font-size:0.8rem;line-height:1.5;">${esc(a.email)}<br>${esc(a.phone || "")}</td>
                         <td style="padding:10px;text-align:center;">${badge(a.status)}</td>
                         <td style="padding:10px;text-align:center;color:var(--muted);">${fmtTime(a.checkin_datetime)}</td>
                     </tr>`
@@ -535,10 +544,61 @@ async function saveSession() {
     if (req.ok) {
         document.querySelector("#modal_session_overlay").classList.remove("open");
         refreshTimetable();
+        if (!editingSessionId) {
+            offerRecurringSession(payload);
+        }
     } else {
         // Show the server's validation message inside the modal
         const fail = await req.json();
         document.querySelector("#form_error_msg").textContent = fail.message;
+    }
+}
+
+function addDays(dateStr, days) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const date = new Date(y, m - 1, d + days);
+    const pad = n => String(n).padStart(2, "0");
+    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+}
+
+function showRecurringConfirm(nextDate) {
+    return new Promise(resolve => {
+        const overlay = document.querySelector("#modal_recurring_overlay");
+        document.querySelector("#modal_recurring_date").textContent = nextDate;
+        overlay.classList.add("open");
+
+        document.querySelector("#btn_recurring_yes").onclick = () => {
+            overlay.classList.remove("open");
+            resolve(true);
+        };
+        document.querySelector("#btn_recurring_no").onclick = () => {
+            overlay.classList.remove("open");
+            resolve(false);
+        };
+        overlay.onclick = e => {
+            if (e.target === overlay) { overlay.classList.remove("open"); resolve(false); }
+        };
+    });
+}
+
+async function offerRecurringSession(lastPayload) {
+    const nextDate  = addDays(lastPayload.start_date, 7);
+    const confirmed = await showRecurringConfirm(nextDate);
+    if (!confirmed) return;
+
+    const nextPayload = { ...lastPayload, start_date: nextDate };
+    const req = await fetch("/api/admin/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextPayload)
+    });
+
+    if (req.ok) {
+        refreshTimetable();
+        await offerRecurringSession(nextPayload);
+    } else {
+        const fail = await req.json();
+        alert("Could not create next session: " + (fail.message || "Unknown error"));
     }
 }
 
@@ -579,29 +639,49 @@ async function deleteSession(sessionId) {
 
 //  Manage Customers:
 // Fetches all non-admin users from the server and renders them in the customers table.
-async function loadCustomers() {
-    const req = await fetch("/api/admin/customers");
+let customerSearchTimer = null;
+
+async function loadCustomers(q = "") {
+    const url = q ? "/api/admin/customers?q=" + encodeURIComponent(q) : "/api/admin/customers";
+    const req = await fetch(url);
     if (!req.ok) return;
     const res = await req.json();
     renderCustomers(res.data);
+
+    // Wire search input (once — guard with data attribute)
+    const searchEl = document.querySelector("#customer_search");
+    if (searchEl && !searchEl.dataset.wired) {
+        searchEl.dataset.wired = "1";
+        searchEl.addEventListener("input", () => {
+            clearTimeout(customerSearchTimer);
+            customerSearchTimer = setTimeout(() => loadCustomers(searchEl.value.trim()), 300);
+        });
+    }
+
+    // Wire create customer button
+    const createBtn = document.querySelector("#btn_create_customer");
+    if (createBtn && !createBtn.dataset.wired) {
+        createBtn.dataset.wired = "1";
+        createBtn.addEventListener("click", openCreateCustomerModal);
+    }
 }
 
-// Builds a table row for each customer with View, Edit, and Delete buttons.
 function renderCustomers(customers) {
     const tbody = document.querySelector("#customers_body");
     tbody.innerHTML = "";
 
     if (customers.length === 0) {
-        tbody.innerHTML = "<tr><td colspan='4'>No customers found.</td></tr>";
+        tbody.innerHTML = "<tr><td colspan='5'>No customers found.</td></tr>";
         return;
     }
 
     for (let customer of customers) {
         const row = document.createElement("tr");
         row.innerHTML =
-            "<td>" + customer.user_id + "</td>" +
-            "<td>" + customer.first_name + " " + customer.last_name + "</td>" +
-            "<td>" + customer.email + "</td>" +
+            "<td>" + esc(customer.user_id) + "</td>" +
+            "<td>" + esc(customer.first_name) + " " + esc(customer.last_name) + "</td>" +
+            "<td>" + esc(customer.email) + "</td>" +
+            "<td>" + esc(customer.phone || "—") + "</td>" +
             "<td class='td-actions'>" +
                 "<button id='btn_view_" + customer.user_id + "' class='btn-ghost btn-sm'>View</button>"      +
                 "<button id='btn_edit_" + customer.user_id + "' class='btn-ghost btn-sm'>Edit</button>"      +
@@ -614,6 +694,64 @@ function renderCustomers(customers) {
         document.querySelector("#btn_edit_" + customer.user_id).addEventListener("click", () => openEditModal(customer, "customer"));
         document.querySelector("#btn_delete_" + customer.user_id).addEventListener("click", () => openDeleteAccountModal(customer, "customer"));
     }
+}
+
+function openCreateCustomerModal() {
+    ["cc_first_name","cc_last_name","cc_email","cc_phone","cc_dob","cc_password"].forEach(id => {
+        const el = document.querySelector("#" + id);
+        if (el) el.value = "";
+    });
+    const genderEl = document.querySelector("#cc_gender");
+    if (genderEl) genderEl.value = "";
+    const errEl = document.querySelector("#cc_error_msg");
+    if (errEl) errEl.textContent = "";
+
+    const overlay = document.querySelector("#modal_create_customer_overlay");
+    overlay.classList.add("open");
+
+    const closeBtn = document.querySelector("#btn_close_create_customer");
+    closeBtn.onclick = () => overlay.classList.remove("open");
+    overlay.onclick = e => { if (e.target === overlay) overlay.classList.remove("open"); };
+
+    const submitBtn = document.querySelector("#btn_cc_submit");
+    submitBtn.onclick = null;
+    submitBtn.onclick = async () => {
+        errEl.textContent = "";
+        const payload = {
+            first_name: document.querySelector("#cc_first_name").value.trim(),
+            last_name:  document.querySelector("#cc_last_name").value.trim(),
+            email:      document.querySelector("#cc_email").value.trim(),
+            phone:      document.querySelector("#cc_phone").value.trim(),
+            date_of_birth: document.querySelector("#cc_dob").value,
+            gender:     document.querySelector("#cc_gender").value,
+            password:   document.querySelector("#cc_password").value
+        };
+
+        if (!payload.first_name || !payload.last_name || !payload.email || !payload.phone || !payload.dob || !payload.gender || !payload.password) {
+            errEl.textContent = "Please fill in all fields.";
+            return;
+        }
+
+        submitBtn.disabled    = true;
+        submitBtn.textContent = "Creating...";
+
+        const req = await fetch("/api/admin/customers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        submitBtn.disabled    = false;
+        submitBtn.textContent = "Create Account";
+
+        if (req.ok) {
+            overlay.classList.remove("open");
+            loadCustomers();
+        } else {
+            const fail = await req.json();
+            errEl.textContent = fail.message || "Failed to create account.";
+        }
+    };
 }
 
 // Fetches the full profile for one customer (account info, membership, bookings)
@@ -648,11 +786,12 @@ async function openCustomerProfile(customerId) {
     accountCard.className = "profile-card";
     accountCard.innerHTML =
         "<h3>Account Information</h3>" +
-        "<div class='profile-row'><span class='profile-label'>User ID</span><span>" + user.user_id + "</span></div>" +
-        "<div class='profile-row'><span class='profile-label'>Email</span><span>" + user.email + "</span></div>" +
-        "<div class='profile-row'><span class='profile-label'>Phone</span><span>" + user.phone + "</span></div>" +
-        "<div class='profile-row'><span class='profile-label'>Date of Birth</span><span>" + user.date_of_birth + "</span></div>" +
-        "<div class='profile-row'><span class='profile-label'>Gender</span><span>" + user.gender + "</span></div>";
+        "<div class='profile-row'><span class='profile-label'>User ID</span><span>" + esc(user.user_id) + "</span></div>" +
+        "<div class='profile-row'><span class='profile-label'>Email</span><span>" + esc(user.email) + "</span></div>" +
+        "<div class='profile-row'><span class='profile-label'>Phone</span><span>" + esc(user.phone) + "</span></div>" +
+        "<div class='profile-row'><span class='profile-label'>Date of Birth</span><span>" + esc(user.date_of_birth) + "</span></div>" +
+        "<div class='profile-row'><span class='profile-label'>Gender</span><span>" + esc(user.gender) + "</span></div>" +
+        "<div class='profile-row' style='align-items:flex-start;'><span class='profile-label' style='padding-top:2px;'>Medical / Allergy Info</span><span style='white-space:pre-wrap;'>" + (user.medical_info ? esc(user.medical_info) : "<em style='color:var(--muted);font-style:italic;'>None on record</em>") + "</span></div>";
     section.appendChild(accountCard);
 
     // Membership card — shows status badge and dates if the customer has a membership
@@ -961,14 +1100,15 @@ async function loadReports(filter) {
     }
     const res = await req.json();
 
-    const { total_revenue, booking_revenue, membership_revenue, payments } = res.data;
+    const { total_revenue, booking_revenue, membership_revenue, ticket_revenue, payments } = res.data;
     currentReportPayments = payments;
 
     // Update the revenue summary cards (convert pence to £)
-    document.querySelector("#report_total").textContent = "£" + (total_revenue / 100).toFixed(2);
-    document.querySelector("#report_bookings").textContent = "£" + (booking_revenue/ 100).toFixed(2);
-    document.querySelector("#report_memberships").textContent = "£" + (membership_revenue/ 100).toFixed(2);
-    document.querySelector("#report_count").textContent = payments.length;
+    document.querySelector("#report_total").textContent        = "£" + (total_revenue      / 100).toFixed(2);
+    document.querySelector("#report_bookings").textContent     = "£" + (booking_revenue    / 100).toFixed(2);
+    document.querySelector("#report_memberships").textContent  = "£" + (membership_revenue / 100).toFixed(2);
+    document.querySelector("#report_tickets").textContent      = "£" + ((ticket_revenue || 0) / 100).toFixed(2);
+    document.querySelector("#report_count").textContent        = payments.length;
 
     renderReports(payments);
 

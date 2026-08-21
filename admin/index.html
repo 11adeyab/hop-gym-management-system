@@ -871,12 +871,17 @@
     <template id="template_customers">
         <section>
             <h2>Manage Customers</h2>
+            <div class="toolbar">
+                <input type="search" id="customer_search" placeholder="Search by name, email, phone, or ID…" style="flex:1;max-width:360px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);font-size:0.9rem;">
+                <button id="btn_create_customer" class="btn-primary">+ Add Customer</button>
+            </div>
             <table>
                 <thead>
                     <tr>
                         <th>ID</th>
                         <th>Full Name</th>
                         <th>Email</th>
+                        <th>Phone</th>
                         <th></th>
                     </tr>
                 </thead>
@@ -884,6 +889,47 @@
             </table>
         </section>
     </template>
+
+    <!-- Create Customer Modal -->
+    <div id="modal_create_customer_overlay" class="modal-overlay">
+        <div class="modal-box" style="max-width:480px;">
+            <h3>Add Customer</h3>
+
+            <label class="form-label" for="cc_first_name">First Name</label>
+            <input type="text" id="cc_first_name" class="form-input" placeholder="First name">
+
+            <label class="form-label" for="cc_last_name">Last Name</label>
+            <input type="text" id="cc_last_name" class="form-input" placeholder="Last name">
+
+            <label class="form-label" for="cc_email">Email</label>
+            <input type="email" id="cc_email" class="form-input" placeholder="Email address">
+
+            <label class="form-label" for="cc_phone">Phone</label>
+            <input type="tel" id="cc_phone" class="form-input" placeholder="Phone number">
+
+            <label class="form-label" for="cc_dob">Date of Birth</label>
+            <input type="date" id="cc_dob" class="form-input">
+
+            <label class="form-label" for="cc_gender">Gender</label>
+            <select id="cc_gender" class="form-input">
+                <option value="">Select gender</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+            </select>
+
+            <label class="form-label" for="cc_password">Temporary Password</label>
+            <input type="text" id="cc_password" class="form-input" placeholder="Set a temporary password">
+
+            <p id="cc_error_msg" class="error-msg" style="margin-top:8px;"></p>
+
+            <div class="modal-actions" style="margin-top:16px;">
+                <button id="btn_close_create_customer" class="btn-ghost">Cancel</button>
+                <button id="btn_cc_submit" class="btn-primary">Create Account</button>
+            </div>
+        </div>
+    </div>
 
     <template id="template_staff">
         <section>
@@ -925,6 +971,10 @@
                 <div class="summary-card">
                     <div class="summary-label">Membership Revenue</div>
                     <div class="summary-value" id="report_memberships">£0.00</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Ticket Revenue</div>
+                    <div class="summary-value" id="report_tickets">£0.00</div>
                 </div>
                 <div class="summary-card">
                     <div class="summary-label">Total Payments</div>
@@ -979,14 +1029,11 @@
             <div class="form-row">
                 <div>
                     <label class="form-label" for="form_duration">Duration (hours)</label>
-                    <select id="form_duration" class="form-input">
-                        <option value="1">1 hour</option>
-                        <option value="2">2 hours</option>
-                    </select>
+                    <input type="number" id="form_duration" class="form-input" min="1" max="24" step="1" placeholder="e.g. 2">
                 </div>
                 <div>
                     <label class="form-label" for="form_capacity">Capacity</label>
-                    <input type="number" id="form_capacity" class="form-input" min="1" placeholder="20">
+                    <input type="number" id="form_capacity" class="form-input" min="1" step="1" placeholder="20">
                 </div>
             </div>
 
@@ -1201,6 +1248,20 @@
             <div class="modal-actions">
                 <button id="modal_edit_btn_save" class="btn-primary">Save Changes</button>
                 <button id="modal_edit_btn_close" class="btn-ghost">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recurring session confirmation modal -->
+    <div id="modal_recurring_overlay" class="modal-overlay">
+        <div class="modal-box-sm">
+            <h3>Repeat Session?</h3>
+            <p style="margin:12px 0 20px;color:var(--muted);font-size:0.9rem;">
+                Add the same session again on <strong id="modal_recurring_date"></strong>?
+            </p>
+            <div class="modal-actions centered">
+                <button id="btn_recurring_yes" class="btn-primary">Yes</button>
+                <button id="btn_recurring_no"  class="btn-ghost">No</button>
             </div>
         </div>
     </div>

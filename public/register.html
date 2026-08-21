@@ -399,6 +399,12 @@
                 <label for="confirm_password">Confirm Password</label>
                 <input type="password" id="confirm_password" placeholder="Re-enter your password">
 
+                <hr class="section-divider">
+
+                <label for="medical_info">Medical Information <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
+                <p style="font-size:0.78rem;color:var(--muted);margin-bottom:8px;">Please include any relevant conditions such as food allergies, ADHD, disabilities, or other health information staff should be aware of.</p>
+                <textarea id="medical_info" placeholder="e.g. Nut allergy, asthma inhaler required" style="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);color:var(--text);font-size:0.88rem;font-family:inherit;resize:vertical;min-height:80px;"></textarea>
+
                 <div id="step2_error" style="color:var(--danger);font-size:0.82rem;margin-top:10px;min-height:1rem;"></div>
                 <button class="btn-primary" onclick="advanceToConfirm()">Review Order →</button>
                 <button class="btn-back" onclick="backToSelect()">← Back</button>

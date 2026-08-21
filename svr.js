@@ -16,15 +16,15 @@ const db = new Database(path.resolve(__dirname, "database.db"));
 db.pragma("journal_mode = WAL");
 
 // Wraps better-sqlite3 (synchronous) in a Promise so all routes can use async/await unchanged
-function query(sql) {
+function query(sql, params = []) {
     return new Promise((resolve, reject) => {
         try {
             const stmt  = db.prepare(sql);
             const upper = sql.trimStart().toUpperCase();
             if (upper.startsWith("SELECT") || upper.startsWith("WITH")) {
-                resolve(stmt.all());
+                resolve(stmt.all(...params));
             } else {
-                resolve(stmt.run());
+                resolve(stmt.run(...params));
             }
         } catch (e) {
             reject(e);
@@ -212,6 +212,29 @@ function initDb() {
             WHERE price_key = 'awards_standalone' AND label NOT LIKE '%Non-Contact%';
     `);
 
+    // Migrate: add medical_info to users and pending_registrations
+    const userCols = db.prepare("PRAGMA table_info(users)").all();
+    if (!userCols.some(c => c.name === "medical_info")) {
+        db.exec("ALTER TABLE users ADD COLUMN medical_info TEXT NOT NULL DEFAULT ''");
+    }
+    const pendingCols = db.prepare("PRAGMA table_info(pending_registrations)").all();
+    if (!pendingCols.some(c => c.name === "medical_info")) {
+        db.exec("ALTER TABLE pending_registrations ADD COLUMN medical_info TEXT NOT NULL DEFAULT ''");
+    }
+
+    // Migrate: add reminder_sent to memberships
+    const memCols = db.prepare("PRAGMA table_info(memberships)").all();
+    if (!memCols.some(c => c.name === "reminder_sent")) {
+        db.exec("ALTER TABLE memberships ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0");
+    }
+
+    // Persistent session store table
+    db.exec(`CREATE TABLE IF NOT EXISTS sessions_store (
+        sid        TEXT PRIMARY KEY,
+        sess       TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+    )`);
+
     // Seed a default admin account if none exists yet
     const adminCount = db.prepare("SELECT COUNT(*) AS c FROM users WHERE is_admin = 1").get();
     if (adminCount.c === 0) {
@@ -261,11 +284,117 @@ const transport = nodemailer.createTransport({
     }
 );
 
-//used to store and maange user sessions on the server
-app.use(session({ 
+// Sends a pass-expiry reminder email to carded boxers whose monthly pass expires within 3 days
+async function sendExpiryReminders() {
+    try {
+        const today         = toLocalDateStr(new Date());
+        const inThreeDays   = toLocalDateStr(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000));
+        const expiring = await query(`
+            SELECT m.membership_id, m.end_date, u.first_name, u.email
+            FROM memberships m
+            JOIN users u ON m.user_id = u.user_id
+            WHERE m.membership_type = 'monthly'
+              AND m.status = 'active'
+              AND m.end_date BETWEEN '${today}' AND '${inThreeDays}'
+              AND m.reminder_sent = 0
+        `);
+        for (const pass of expiring) {
+            try {
+                await transport.sendMail({
+                    from:    '"HOP Boxing Academy" <11adeyab070704@gmail.com>',
+                    to:      pass.email,
+                    subject: "Your Monthly Pass Expires Soon — HOP Boxing Academy",
+                    html:    `<p>Hi ${pass.first_name},</p>
+                              <p>Your monthly carded boxing pass expires on <strong>${pass.end_date}</strong>.</p>
+                              <p>To continue attending sessions without interruption, please log in and purchase a new monthly pass from the <strong>Tickets</strong> section before it expires.</p>
+                              <p><a href="${process.env.APP_URL || "http://localhost:8080"}/dashboard">Log in to your account →</a></p>
+                              <p>Thank you,<br>HOP Boxing Academy</p>`
+                });
+                await query(`UPDATE memberships SET reminder_sent = 1 WHERE membership_id = ${pass.membership_id}`);
+                console.log(`Expiry reminder sent → ${pass.email} (pass ends ${pass.end_date})`);
+            } catch (mailErr) {
+                console.error(`Reminder failed for ${pass.email}:`, mailErr.message);
+            }
+        }
+    } catch (err) {
+        console.error("sendExpiryReminders error:", err.message);
+    }
+}
+// Run on startup, then every 12 hours
+sendExpiryReminders();
+setInterval(sendExpiryReminders, 12 * 60 * 60 * 1000).unref();
+
+// Auto-books all future eligible Carded sessions for a user who just purchased a monthly pass
+async function autoBookUserSessions(user_id, pass_start_date, pass_end_date) {
+    try {
+        const users = await query(`SELECT date_of_birth, gender FROM users WHERE user_id = ${user_id} LIMIT 1`);
+        if (users.length === 0) return;
+        const userAge    = computeAge(users[0].date_of_birth) ?? 0;
+        const userGender = users[0].gender || 'Any';
+        const today      = toLocalDateStr(new Date());
+        const sessions   = await query(`SELECT session_id FROM sessions WHERE membership_eligibility = 'Carded' AND start_date >= '${today}' AND start_date BETWEEN '${pass_start_date}' AND '${pass_end_date}' AND min_age <= ${userAge} AND max_age >= ${userAge} AND (gender_eligibility = 'Any' OR gender_eligibility = '${userGender}') AND capacity > 0 AND session_id NOT IN (SELECT session_id FROM bookings WHERE user_id = ${user_id})`);
+        for (const s of sessions) {
+            await query(`INSERT INTO bookings (user_id, session_id) VALUES (${user_id}, ${s.session_id})`);
+            await query(`UPDATE sessions SET capacity = MAX(capacity - 1, 0) WHERE session_id = ${s.session_id}`);
+        }
+        if (sessions.length > 0) console.log(`Auto-booked ${sessions.length} session(s) for user ${user_id}`);
+    } catch (err) {
+        console.error("autoBookUserSessions error:", err.message);
+    }
+}
+
+// Auto-books all active monthly pass holders who are eligible for a newly-created Carded session
+async function autoBookPassHolders(session_id, start_date, min_age, max_age, gender_eligibility) {
+    try {
+        const passHolders = await query(`SELECT DISTINCT m.user_id, u.date_of_birth, u.gender FROM memberships m JOIN users u ON m.user_id = u.user_id WHERE m.membership_type = 'monthly' AND m.status = 'active' AND m.end_date >= date('now') AND '${start_date}' BETWEEN m.start_date AND m.end_date`);
+        let count = 0;
+        for (const ph of passHolders) {
+            const age = computeAge(ph.date_of_birth) ?? 0;
+            if (age < min_age || age > max_age) continue;
+            if (gender_eligibility !== 'Any' && ph.gender !== gender_eligibility) continue;
+            const existing = await query(`SELECT booking_id FROM bookings WHERE user_id = ${ph.user_id} AND session_id = ${session_id} LIMIT 1`);
+            if (existing.length > 0) continue;
+            const cap = await query(`SELECT capacity FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
+            if (cap.length === 0 || cap[0].capacity <= 0) break;
+            await query(`INSERT INTO bookings (user_id, session_id) VALUES (${ph.user_id}, ${session_id})`);
+            await query(`UPDATE sessions SET capacity = MAX(capacity - 1, 0) WHERE session_id = ${session_id}`);
+            count++;
+        }
+        if (count > 0) console.log(`Auto-booked ${count} pass holder(s) for session ${session_id}`);
+    } catch (err) {
+        console.error("autoBookPassHolders error:", err.message);
+    }
+}
+
+// SQLite-backed session store — sessions survive server restarts
+class SQLiteSessionStore extends session.Store {
+    get(sid, cb) {
+        const row = db.prepare("SELECT sess FROM sessions_store WHERE sid = ? AND expires_at > ?").get(sid, Date.now());
+        cb(null, row ? JSON.parse(row.sess) : null);
+    }
+    set(sid, sess, cb) {
+        const ttl = (sess.cookie && sess.cookie.maxAge) ? sess.cookie.maxAge : 7 * 24 * 60 * 60 * 1000;
+        db.prepare("INSERT OR REPLACE INTO sessions_store (sid, sess, expires_at) VALUES (?, ?, ?)").run(sid, JSON.stringify(sess), Date.now() + ttl);
+        cb(null);
+    }
+    destroy(sid, cb) {
+        db.prepare("DELETE FROM sessions_store WHERE sid = ?").run(sid);
+        cb(null);
+    }
+    touch(sid, sess, cb) {
+        const ttl = (sess.cookie && sess.cookie.maxAge) ? sess.cookie.maxAge : 7 * 24 * 60 * 60 * 1000;
+        db.prepare("UPDATE sessions_store SET expires_at = ? WHERE sid = ?").run(Date.now() + ttl, sid);
+        if (cb) cb(null);
+    }
+}
+setInterval(() => db.prepare("DELETE FROM sessions_store WHERE expires_at <= ?").run(Date.now()), 3_600_000).unref();
+
+app.use(session({
     secret: "this is my secret",
     resave: false,
-    saveUninitialized: false 
+    saveUninitialized: false,
+    store: new SQLiteSessionStore(),
+    cookie: { maxAge: 7 * 24 * 60 * 60 * 1000 }
 }));
 
 app.use(express.json());
@@ -274,9 +403,8 @@ app.use(express.json());
 // These must come before the generic public static so their auth checks run first
 
 app.use("/dashboard", (req, res, next) => {
-    if (!req.session.user) {
-        return res.redirect("/login");
-    }
+    if (!req.session.user) return res.redirect("/login");
+    if (req.session.user.is_admin) return res.redirect("/admin");
     next();
 }, express.static(path.resolve(__dirname, "private")));
 
@@ -381,7 +509,8 @@ app.get("/register/success", async (req, res) => {
         }
 
         const dobStr = toLocalDateStr(pending.date_of_birth);
-        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password) VALUES ('${pending.first_name}','${pending.last_name}','${dobStr}','${pending.gender}','${pending.email}','${pending.phone}','${pending.password_hash}'\)`);
+        const safeMedReg = String(pending.medical_info || "").replace(/'/g, "''");
+        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password, medical_info) VALUES ('${pending.first_name}','${pending.last_name}','${dobStr}','${pending.gender}','${pending.email}','${pending.phone}','${pending.password_hash}','${safeMedReg}')`);
         const created = await query(`SELECT * FROM users WHERE email = '${pending.email}' LIMIT 1`);
         const newUser = created[0];
 
@@ -440,7 +569,7 @@ app.use("/", express.static(path.resolve(__dirname, "public")));
 
 // Registration System — Step 1 checkout (10+ users, requires Stripe payment)
 app.post("/register/checkout", async (req, res) => {
-    const { first_name, last_name, dob, gender, email, phone, password, membership_type, include_awards } = req.body;
+    const { first_name, last_name, dob, gender, email, phone, password, membership_type, include_awards, medical_info } = req.body;
     if (!first_name || !last_name || !dob || !gender || !email || !phone || !password || !membership_type) {
         return res.status(400).json({ message: "All fields are required." });
     }
@@ -462,8 +591,9 @@ app.post("/register/checkout", async (req, res) => {
 
         const hashed = await bcrypt.hash(password, 10);
 
+        const safeMedical = String(medical_info || "").replace(/'/g, "''");
         await query(`DELETE FROM pending_registrations WHERE email = '${email}' AND status = 'pending'`);
-        await query(`INSERT INTO pending_registrations (first_name, last_name, date_of_birth, gender, email, phone, password_hash, membership_type, include_awards, amount_pence) VALUES ('${first_name}','${last_name}','${dob}','${gender}','${email}','${phone}','${hashed}','${membership_type}',${include_awards ? 1 : 0}, ${totalAmount})`);
+        await query(`INSERT INTO pending_registrations (first_name, last_name, date_of_birth, gender, email, phone, password_hash, membership_type, include_awards, amount_pence, medical_info) VALUES ('${first_name}','${last_name}','${dob}','${gender}','${email}','${phone}','${hashed}','${membership_type}',${include_awards ? 1 : 0}, ${totalAmount}, '${safeMedical}')`);
 
         const typeLabels = { non_carded: "Non-Carded Membership", carded: "Carded Membership" };
         const baseUrl = req.protocol + "://" + req.get("host");
@@ -497,7 +627,7 @@ app.post("/register/checkout", async (req, res) => {
 
 // Registration System — Minnow path (under 10, free account, no payment)
 app.post("/register/minnow", async (req, res) => {
-    const { first_name, last_name, dob, gender, email, phone, password } = req.body;
+    const { first_name, last_name, dob, gender, email, phone, password, medical_info } = req.body;
     if (!first_name || !last_name || !dob || !gender || !email || !phone || !password) {
         return res.status(400).json({ message: "All fields are required." });
     }
@@ -508,7 +638,8 @@ app.post("/register/minnow", async (req, res) => {
         const existing = await query(`SELECT user_id FROM users WHERE email = '${email}' LIMIT 1`);
         if (existing.length > 0) return res.status(400).json({ message: "An account with this email already exists." });
         const hashed = await bcrypt.hash(password, 10);
-        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password) VALUES ('${first_name}','${last_name}','${dob}','${gender}','${email}','${phone}','${hashed}'\)`);
+        const safeMedMinnow = String(medical_info || "").replace(/'/g, "''");
+        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password, medical_info) VALUES ('${first_name}','${last_name}','${dob}','${gender}','${email}','${phone}','${hashed}','${safeMedMinnow}')`);
         const created = await query(`SELECT * FROM users WHERE email = '${email}' LIMIT 1`);
         req.session.user = {
             user_id: created[0].user_id, first_name: created[0].first_name, last_name: created[0].last_name,
@@ -526,7 +657,7 @@ app.post("/register/minnow", async (req, res) => {
 app.post("/login", async (req, res) => {
     try {
         //find out if user email is stored in the system.
-        const users = await query(`SELECT * FROM users WHERE email = '${req.body.email}' LIMIT 1`);
+        const users = await query(`SELECT * FROM users WHERE email = ? LIMIT 1`, [req.body.email]);
         //if the user can't be found
         if (users.length === 0) {
             return res.status(401).json({ message: "Login failed, user credentials could not be found!" });
@@ -565,6 +696,29 @@ app.get("/api/user", (req, res) => {
         return res.redirect("/");
     }
     res.json({ data: req.session.user });
+});
+
+app.patch("/api/user/profile", async (req, res) => {
+    if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
+    const user_id = req.session.user.user_id;
+    const { first_name, last_name, phone, email } = req.body;
+    if (!first_name || !last_name || !phone || !email) {
+        return res.status(400).json({ message: "Please fill in all fields." });
+    }
+    try {
+        if (email.toLowerCase() !== req.session.user.email.toLowerCase()) {
+            const dup = await query(`SELECT user_id FROM users WHERE LOWER(email) = '${email.toLowerCase().replace(/'/g,"''")}' AND user_id != ${user_id} LIMIT 1`);
+            if (dup.length > 0) return res.status(400).json({ message: "That email is already in use by another account." });
+        }
+        await query(`UPDATE users SET first_name='${first_name.replace(/'/g,"''")}', last_name='${last_name.replace(/'/g,"''")}', phone='${phone.replace(/'/g,"''")}', email='${email.replace(/'/g,"''")}' WHERE user_id=${user_id}`);
+        req.session.user.first_name = first_name;
+        req.session.user.last_name  = last_name;
+        req.session.user.phone      = phone;
+        req.session.user.email      = email;
+        return res.json({ message: "Profile updated successfully." });
+    } catch (error) {
+        return res.status(500).json({ message: "Update failed. Please try again." });
+    }
 });
 
 
@@ -612,26 +766,33 @@ app.post("/api/bookings/checkout", async (req, res) => {
         }
     }
     try {
+        // Fetch session from DB first — needed for eligibility, price, and auto-booked duplicate handling
+        const sessionRows = await query(`SELECT membership_eligibility, price_pence, capacity, session_type, min_age, max_age, gender_eligibility, start_date, start_time, duration FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
+        if (sessionRows.length === 0) return res.status(404).json({ message: "Session not found." });
+        const sDetail = sessionRows[0];
+        const age     = computeAge(dob);
+        const memElig = sDetail.membership_eligibility || "Any";
+
         const duplicate = await query(`SELECT booking_id FROM bookings WHERE user_id = ${user_id} AND session_id = ${session_id}`);
         if (duplicate.length >= 1) {
+            // For carded seniors, the booking may have been auto-created when they bought their pass
+            if (memElig === "Carded" && age !== null && age >= 17) {
+                const autoPass = await query(`SELECT membership_id FROM memberships WHERE user_id = ${user_id} AND membership_type = 'monthly' AND status = 'active' AND '${sDetail.start_date}' BETWEEN start_date AND end_date AND end_date >= date('now') LIMIT 1`);
+                if (autoPass.length > 0) return res.json({ free: true });
+            }
             return res.status(400).json({ message: "This session has already been booked!" });
         }
-        const [newH, newM] = start_time.split(":");
+        const [newH, newM] = sDetail.start_time.split(":");
         const newStartMins = parseInt(newH) * 60 + parseInt(newM);
-        const newEndMins   = newStartMins + duration * 60;
-        const overlaps = await query(`SELECT b.booking_id FROM bookings b JOIN sessions s ON b.session_id = s.session_id WHERE b.user_id = ${user_id} AND s.start_date = '${start_date}' AND s.session_id != ${session_id} AND (CAST(substr(s.start_time,1,2) AS INTEGER)*60 + CAST(substr(s.start_time,4,2) AS INTEGER)) < ${newEndMins} AND (CAST(substr(s.start_time,1,2) AS INTEGER)*60 + CAST(substr(s.start_time,4,2) AS INTEGER) + s.duration*60) > ${newStartMins}`);
+        const newEndMins   = newStartMins + sDetail.duration * 60;
+        const overlaps = await query(`SELECT b.booking_id FROM bookings b JOIN sessions s ON b.session_id = s.session_id WHERE b.user_id = ${user_id} AND s.start_date = '${sDetail.start_date}' AND s.session_id != ${session_id} AND (CAST(substr(s.start_time,1,2) AS INTEGER)*60 + CAST(substr(s.start_time,4,2) AS INTEGER)) < ${newEndMins} AND (CAST(substr(s.start_time,1,2) AS INTEGER)*60 + CAST(substr(s.start_time,4,2) AS INTEGER) + s.duration*60) > ${newStartMins}`);
         if (overlaps.length > 0) {
             return res.status(400).json({ message: "You already have a booking that clashes with this session's time." });
         }
 
-        // Fetch session details from DB — client values are not trusted for eligibility or price
-        const sessionRows = await query(`SELECT membership_eligibility, price_pence, capacity, session_type, min_age, max_age, gender_eligibility, start_date FROM sessions WHERE session_id = ${session_id} LIMIT 1`);
-        if (sessionRows.length === 0) return res.status(404).json({ message: "Session not found." });
-        const sDetail = sessionRows[0];
         if (sDetail.capacity <= 0) return res.status(400).json({ message: "This session can't be booked, there are no spaces left!" });
 
         // Age check using DB bounds
-        const age = computeAge(dob);
         if (age === null || age < sDetail.min_age || age > sDetail.max_age) {
             return res.status(400).json({ message: `You are not eligible for this session. Age requirement: ${sDetail.min_age}–${sDetail.max_age} years${age !== null ? ` (you are ${age})` : ""}.` });
         }
@@ -640,8 +801,6 @@ app.post("/api/bookings/checkout", async (req, res) => {
         if (sDetail.gender_eligibility !== "Any" && gender.toLowerCase() !== sDetail.gender_eligibility.toLowerCase()) {
             return res.status(400).json({ message: `This session is for ${sDetail.gender_eligibility} only.` });
         }
-
-        const memElig = sDetail.membership_eligibility || "Any";
 
         // Senior Carded (17+): monthly pass is required; booking is free if they hold one
         if (memElig === "Carded" && age >= 17) {
@@ -736,12 +895,15 @@ app.get("/booking/success", async (req, res) => {
 });
 
 async function makeBooking(session, user) {
+    const cap = await query(`SELECT capacity FROM sessions WHERE session_id = ${session.session_id} LIMIT 1`);
+    if (cap.length === 0 || cap[0].capacity <= 0) throw new Error("Session is now fully booked.");
+
     const qrcodeData = crypto.randomUUID();
     const qrCodeBuffer = await qrcode.toBuffer(qrcodeData);
 
-    await query(`INSERT INTO bookings (user_id, session_id, qr_code) VALUES 
-        (${user.user_id}, ${session.session_id}, '${qrcodeData}'\)`);
-    await query(`UPDATE sessions SET capacity = capacity - 1 WHERE session_id = ${session.session_id}`);
+    await query(`INSERT INTO bookings (user_id, session_id, qr_code) VALUES
+        (${user.user_id}, ${session.session_id}, '${qrcodeData}')`);
+    await query(`UPDATE sessions SET capacity = MAX(capacity - 1, 0) WHERE session_id = ${session.session_id}`);
 
     try {
         await transport.sendMail({
@@ -771,13 +933,13 @@ app.get("/api/bookings", async (req, res) => {
             };
             const attendance = await query(`SELECT * FROM attendance WHERE booking_id = ${booking.booking_id}`);
             return {
-                booking_id: booking.booking_id,
-                session_name: sessions[0].session_name,
-                start_date: sessions[0].start_date, 
-                start_time: sessions[0].start_time,
-                duration: sessions[0].duration, 
-                qr_code: await qrcode.toDataURL(booking.qr_code),
-                attended: attendance.length > 0,
+                booking_id:       booking.booking_id,
+                session_id:       booking.session_id,
+                session_name:     sessions[0].session_name,
+                start_date:       sessions[0].start_date,
+                start_time:       sessions[0].start_time,
+                duration:         sessions[0].duration,
+                attended:         attendance.length > 0,
                 checkin_datetime: attendance.length > 0 ? attendance[0].checkin_datetime : null
             };
         }));
@@ -966,6 +1128,9 @@ app.get("/membership/success", async (req, res) => {
         if (memberships.length > 0) {
             await query(`UPDATE payment_memberships SET membership_id = ${memberships[0].membership_id}, status = 'paid' WHERE payment_id = ${payment.payment_id}`);
         }
+        if (payment.membership_type === 'monthly') {
+            await autoBookUserSessions(payment.user_id, payment.start_date, payment.end_date);
+        }
         return res.redirect("/dashboard");
     } catch (error) {
         console.error(error);
@@ -982,7 +1147,9 @@ app.post("/attendance", async (req, res) => {
     if (!req.session.user) return res.status(401).json({ message: "Not logged in" });
     if (!req.body || !req.body.decodedText) return res.json({ message: "❌ No QR data received" });
     try {
-        const sessions = await query(`SELECT session_id, session_name, start_date, start_time, duration, gender_eligibility, min_age, max_age FROM sessions WHERE qr_code = '${req.body.decodedText}' LIMIT 1`);
+        const decodedText = req.body.decodedText;
+        if (!/^[0-9a-f-]{36}$/i.test(decodedText)) return res.json({ message: "❌ Invalid QR code" });
+        const sessions = await query(`SELECT session_id, session_name, start_date, start_time, duration, gender_eligibility, min_age, max_age FROM sessions WHERE qr_code = ? LIMIT 1`, [decodedText]);
         if (sessions.length === 0) return res.json({ message: "❌ Invalid session QR code" });
 
         const session = sessions[0];
@@ -1053,7 +1220,18 @@ app.post("/attendance", async (req, res) => {
             const lateBy = currentTotalMins - startTotalMins;
             label = lateBy === 1 ? "1 minute late" : `${lateBy} minutes late`;
         }
-        return res.json({ message: `✅ Checked in ${label} — ${session.session_name}` });
+        return res.json({
+            success: true,
+            message: `✅ Checked in ${label} — ${session.session_name}`,
+            data: {
+                member_name:  req.session.user.first_name + " " + req.session.user.last_name,
+                session_name: session.session_name,
+                session_date: session.start_date,
+                session_time: session.start_time.slice(0, 5),
+                checkin_time: current_time_str,
+                label
+            }
+        });
     } catch (error) {
         return res.status(500).json({ message: "Server error" });
     }
@@ -1405,7 +1583,12 @@ app.get("/api/admin/sessions/:id/attendees", async (req, res) => {
             JOIN users u ON b.user_id = u.user_id
             LEFT JOIN attendance a ON a.booking_id = b.booking_id
             WHERE b.session_id = ${session_id}
-            ORDER BY u.last_name, u.first_name
+            UNION
+            SELECT NULL AS booking_id, u.user_id, u.first_name, u.last_name, u.email, u.phone, a.checkin_datetime
+            FROM attendance a
+            JOIN users u ON a.user_id = u.user_id
+            WHERE a.session_id = ${session_id} AND a.booking_id IS NULL
+            ORDER BY last_name, first_name
         `);
 
         const sessionStart = new Date(`${session.start_date}T${session.start_time}`);
@@ -1458,8 +1641,8 @@ function validateSessionFields(body, today) {
     if (!start_time) {
          return "Start time is required.";
     }
-    if (duration !== 1 && duration !== 2) {
-        return "Duration must be 1 or 2 hours.";
+    if (typeof duration !== "number" || !Number.isInteger(duration) || duration < 1 || duration > 24) {
+        return "Duration must be a whole number of hours between 1 and 24.";
     }
     if (!instructor || String(instructor).trim() === "") {
         return "Instructor is required.";
@@ -1506,6 +1689,12 @@ app.post("/api/admin/sessions", async (req, res) => {
         const sessionQR = crypto.randomUUID();
         const safeDesc = String(description || "").replace(/'/g, "''");
         await query(`INSERT INTO sessions (session_name, start_date, start_time, duration, instructor, capacity, gender_eligibility, membership_eligibility, min_age, max_age, qr_code, price_pence, session_type, description) VALUES ('${session_name}','${start_date}','${start_time}:00', ${duration}, '${instructor}',${capacity}, '${gender_eligibility}','${membership_eligibility}',${min_age}, ${max_age}, '${sessionQR}',${price_pence}, '${effective_type}', '${safeDesc}')`);
+        if (membership_eligibility === 'Carded' && start_date >= today) {
+            const newSess = await query(`SELECT session_id FROM sessions WHERE qr_code = '${sessionQR}' LIMIT 1`);
+            if (newSess.length > 0) {
+                await autoBookPassHolders(newSess[0].session_id, start_date, Number(min_age), Number(max_age), gender_eligibility);
+            }
+        }
         return res.json({ message: "Session created successfully" });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
@@ -1576,10 +1765,40 @@ app.get("/api/admin/customers", async (req, res) => {
         return res.status(403).json({ message: "Access denied" });
     }
     try {
-        const results = await query(`SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth FROM users WHERE is_admin = 0 ORDER BY last_name ASC, first_name ASC`);
+        const q = (req.query.q || "").trim();
+        let sql;
+        if (q) {
+            // Escape LIKE metacharacters so searches for e.g. "50%" or "_name" are literal
+            const safeLike = "%" + q.toLowerCase().replace(/[%_\\]/g, "\\$&") + "%";
+            sql = `SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth FROM users WHERE is_admin = 0 AND (LOWER(first_name || ' ' || last_name) LIKE ? ESCAPE '\\' OR LOWER(email) LIKE ? ESCAPE '\\' OR CAST(user_id AS TEXT) = ? OR LOWER(phone) LIKE ? ESCAPE '\\') ORDER BY last_name ASC, first_name ASC`;
+            const results = await query(sql, [safeLike, safeLike, q.toLowerCase(), safeLike]);
+            return res.json({ data: results });
+        } else {
+            sql = `SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth FROM users WHERE is_admin = 0 ORDER BY last_name ASC, first_name ASC`;
+        }
+        const results = await query(sql);
         return res.json({ data: results });
     } catch (error) {
         return res.status(500).json({ message: "SQL error" });
+    }
+});
+
+app.post("/api/admin/customers", async (req, res) => {
+    if (!req.session.user || !req.session.user.is_admin) return res.status(403).json({ message: "Access denied" });
+    const { first_name, last_name, email, password, phone, date_of_birth, gender } = req.body;
+    if (!first_name || !last_name || !email || !password || !phone || !date_of_birth || !gender) {
+        return res.status(400).json({ message: "All fields are required." });
+    }
+    if (password.length < 6) return res.status(400).json({ message: "Password must be at least 6 characters." });
+    try {
+        const existing = await query(`SELECT user_id FROM users WHERE LOWER(email) = '${email.toLowerCase().replace(/'/g, "''")}' LIMIT 1`);
+        if (existing.length > 0) return res.status(400).json({ message: "An account with this email already exists." });
+        const hashed = await bcrypt.hash(password, 10);
+        await query(`INSERT INTO users (first_name, last_name, date_of_birth, gender, email, phone, password, is_admin) VALUES ('${first_name.replace(/'/g,"''")}','${last_name.replace(/'/g,"''")}','${date_of_birth}','${gender}','${email.replace(/'/g,"''")}','${phone.replace(/'/g,"''")}','${hashed}', 0)`);
+        return res.json({ message: "Customer account created." });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: "Failed to create account." });
     }
 });
 
@@ -1590,7 +1809,7 @@ app.get("/api/admin/customers/:id", async (req, res) => {
     }
     const customer_id = Number(req.params.id);
     try {
-        const users = await query(`SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth FROM users WHERE user_id = ${customer_id} AND is_admin = 0`);
+        const users = await query(`SELECT user_id, first_name, last_name, email, phone, gender, date_of_birth, medical_info FROM users WHERE user_id = ${customer_id} AND is_admin = 0`);
         if (users.length === 0) {
             return res.status(404).json({ message: "Customer not found" });
         }
